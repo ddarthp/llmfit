@@ -80,7 +80,7 @@
       "bytes": 59678016
     },
     "geometry": {
-      "kvElementsPerToken": 14336,
+      "kvElementsPerToken": 8192,
       "kvElementsFixed": 18350080,
       "maxContext": 131072,
       "detail": {
@@ -96,10 +96,15 @@
         "keyLengthSwa": 256,
         "valueLengthSwa": 256,
         "sharedKvLayers": 18,
-        "derivation": "Scaling term: 7 full layers x 2 kv heads x (512+512) = 14336 per token. Fixed term: 35 sliding layers x 2 kv heads x (256+256) x 512 window = 18350080. shared_kv_layers=18 means 18 layers reuse another layer's cache, which is NOT subtracted here: the estimate is deliberately conservative because the header does not say which layers share.",
-        "measured": "Measured on a 16 GB NVIDIA GPU: with vision, 128K context and the MTP draft model it uses 4676 MiB, against an estimate of 6758 MiB. The estimate is deliberately conservative for this model: shared_kv_layers=18 is not subtracted, and the overhead constants were calibrated on Qwen's vision encoder, which is heavier than Gemma's. Erring high never reports FITS for something that does not fit, but TOO BIG may be pessimistic here."
+        "derivation": "Header arithmetic gives 7 full layers x 2 kv heads x (512+512) = 14336 per token, but measurement says 8192, which is exactly 4 layers. shared_kv_layers=18 is the reason: 3 of the 7 full-attention layers reuse another layer's cache. The measured value is used. Fixed term: 35 sliding layers x 2 kv heads x (256+256) x 512 window = 18350080, not adjusted for sharing because it is under 11 MiB either way.",
+        "measured": "Calibrated on a 16 GB NVIDIA GPU across 64K/128K and vision on/off. The KV delta between 64K and 128K measured 320 MiB against a predicted 560 MiB, which is what exposed the shared-KV layers. With the corrected coefficient the model reproduces all four measurements exactly."
       },
       "summary": "sliding-window attention: 7 of 42 layers scale with context, 35 capped at a 512-token window"
+    },
+    "overhead": {
+      "_comment": "baseMiB is negative because this is a MatFormer: its per-layer embeddings stay in system RAM instead of VRAM, so roughly 1.2 GB of the file is never resident on the GPU. visionMiB is far below Qwen's 448 because Gemma's encoder is lighter.",
+      "baseMiB": -1207,
+      "visionMiB": 202
     },
     "note": "Smallest of the family and caps at 128K, unlike its siblings. Verified end to end: 89 tok/s with vision and speculative decoding."
   },
@@ -137,9 +142,15 @@
         "valueLength": 512,
         "keyLengthSwa": 256,
         "valueLengthSwa": 256,
-        "derivation": "Scaling term: 8 full layers x 1 kv head x (512+512) = 8192 per token. Fixed term: 40 sliding layers x 8 kv heads x (256+256) x 1024 window = 167772160. The context-scaling layers deliberately use a single kv head, which is why 256K stays cheap."
+        "derivation": "Scaling term: 8 full layers x 1 kv head x (512+512) = 8192 per token. Fixed term: 40 sliding layers x 8 kv heads x (256+256) x 1024 window = 167772160. The context-scaling layers deliberately use a single kv head, which is why 256K stays cheap.",
+        "measured": "Calibrated on a 16 GB NVIDIA GPU at 64K, 128K and 256K with vision on and off. The implied overhead came out at exactly 347 MiB at all three context lengths, which confirms the KV coefficient derived from the header needs no correction. shared_kv_layers is 0 on this model."
       },
       "summary": "sliding-window attention: 8 of 48 layers scale with context, 40 capped at a 1024-token window"
+    },
+    "overhead": {
+      "_comment": "Measured, not assumed. Both numbers are well below Qwen's 256/448: Gemma's compute buffers and vision encoder are lighter.",
+      "baseMiB": 347,
+      "visionMiB": 177
     },
     "note": "The dense flagship of the family. Very cheap KV cache for its size."
   },
@@ -179,9 +190,15 @@
         "valueLength": 512,
         "keyLengthSwa": 256,
         "valueLengthSwa": 256,
-        "derivation": "Scaling term: 5 full layers x 2 kv heads x (512+512) = 10240 per token. Fixed term: 25 sliding layers x 8 kv heads x (256+256) x 1024 window = 104857600. Mixture of experts: 8 of 128 experts run per token, but ALL of them must be resident, so the weights cost is the full 14.25 GB."
+        "derivation": "Scaling term: 5 full layers x 2 kv heads x (512+512) = 10240 per token. Fixed term: 25 sliding layers x 8 kv heads x (256+256) x 1024 window = 104857600. Mixture of experts: 8 of 128 experts run per token, but ALL of them must be resident, so the weights cost is the full 14.25 GB.",
+        "measured": "Calibrated on a 16 GB NVIDIA GPU at 64K and 128K, with vision on and off. The implied overhead came out at exactly 313 MiB at both context lengths, confirming the KV coefficient from the header. With vision at 64K the whole thing occupies 15644 MiB and does fit on a 16 GB card, with 351 MiB to spare."
       },
       "summary": "sliding-window attention: 5 of 30 layers scale with context, 25 capped at a 1024-token window"
+    },
+    "overhead": {
+      "_comment": "Measured, not assumed. Being a mixture of experts changes the weights bill, not the compute buffers: these are in line with the dense 12B.",
+      "baseMiB": 313,
+      "visionMiB": 142
     },
     "note": "Mixture of experts: 4B active parameters, but all 128 experts occupy memory."
   }

@@ -89,14 +89,15 @@ function Ensure-Artifact {
   $name = Split-Path -Leaf $Path
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
 
-  # The hash is the contract, not whether the file exists. A half-downloaded
-  # file exists but is useless: resume it (attempt 1) and, if it still does not
-  # match, download it clean (attempt 2).
-  for ($attempt = 1; $attempt -le 2; $attempt++) {
+  # The hash is the contract, not whether the file exists, and not whether curl
+  # exited cleanly. Multi-gigabyte downloads get cut off; only the hash decides
+  # whether we are done. Attempts 1 and 2 resume where the file left off, and
+  # attempt 3 starts over in case the partial data itself is bad.
+  for ($attempt = 1; $attempt -le 3; $attempt++) {
     if (Test-Path -LiteralPath $Path) {
       if ((Get-Sha256 -Path $Path) -eq $Sha256) { Write-Host "  OK: $name" -ForegroundColor Green; return }
-      if ($attempt -eq 1) {
-        Write-Host "  $name is incomplete or corrupt. Resuming download..." -ForegroundColor Yellow
+      if ($attempt -lt 3) {
+        Write-Host "  $name is incomplete. Resuming (attempt $attempt of 3)..." -ForegroundColor Yellow
       } else {
         Write-Host "  $name still does not match. Downloading from scratch..." -ForegroundColor Yellow
         Remove-Item -LiteralPath $Path -Force
@@ -104,12 +105,18 @@ function Ensure-Artifact {
     } else {
       Write-Host "  Downloading $name..." -ForegroundColor Cyan
     }
-    & curl.exe -L --fail --show-error --progress-bar -C - -o $Path $Url
-    if ($LASTEXITCODE -ne 0) { throw "Download failed for $name. URL: $Url" }
+    # --retry lets curl ride out transient drops on its own; -C - makes every
+    # retry pick up where the file stopped instead of starting again.
+    & curl.exe -L --fail --show-error --progress-bar -C - --retry 5 --retry-delay 3 --retry-all-errors -o $Path $Url
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host "  Transfer interrupted (curl exit $LASTEXITCODE)." -ForegroundColor Yellow
+    }
   }
 
   $actual = Get-Sha256 -Path $Path
-  if ($actual -ne $Sha256) { throw "SHA-256 mismatch for $Path.`nExpected: $Sha256`nGot:      $actual" }
+  if ($actual -ne $Sha256) {
+    throw "Could not download $name after 3 attempts.`nExpected: $Sha256`nGot:      $actual`nURL: $Url"
+  }
   Write-Host "  OK: $name" -ForegroundColor Green
 }
 
@@ -333,10 +340,15 @@ Write-Host "  KV quantized to $cacheType ($cacheBytes bytes per element)." -Fore
 Write-Host "  $($model.geometry.summary)." -ForegroundColor DarkGray
 Write-Host ''
 
-# Overhead calibrated against nvidia-smi: the vision encoder adds compute
-# buffers well beyond the weight of the mmproj file itself.
-$overheadMiB = [double]$serverConfig.computeOverheadMiB
-if ($useVision) { $overheadMiB += [double]$serverConfig.visionOverheadMiB }
+# Overhead calibrated against nvidia-smi. It differs enough between
+# architectures that a model may carry its own measured values; the numbers in
+# server.json are the fallback for models nobody has measured yet.
+$overheadMiB = if ($null -ne $model.overhead.baseMiB) { [double]$model.overhead.baseMiB }
+               else { [double]$serverConfig.computeOverheadMiB }
+if ($useVision) {
+  $overheadMiB += if ($null -ne $model.overhead.visionMiB) { [double]$model.overhead.visionMiB }
+                  else { [double]$serverConfig.visionOverheadMiB }
+}
 $contexts = @()
 foreach ($context in $serverConfig.contextOptions) {
   if ($context -gt $model.geometry.maxContext) { continue }

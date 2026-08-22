@@ -301,6 +301,8 @@ To add your own model, add an entry to `config/models.json` with its URL, SHA-25
 
 The `harness` section defines the name each tool uses for the local provider. Match it to what you already have — registering a second name creates a duplicate provider pointing at the same server.
 
+Each model may carry its own `overhead` block with measured `baseMiB` and `visionMiB` values. When it does, those win over the defaults in `config/server.json`. A new model works without one; it just inherits constants measured on something else, so measure it if the numbers matter to you.
+
 ---
 
 ## Living alongside your cloud providers
@@ -347,15 +349,34 @@ To add your own model, put an entry in `config/models.json` with its URL, SHA-25
 
 A 16 GB NVIDIA card, measured with `nvidia-smi`:
 
+Every model in the catalog has been measured against `nvidia-smi` on a 16 GB NVIDIA card. A sample:
+
 | Configuration | Estimated | VRAM used | Generation |
 | --- | --- | --- | --- |
-| Qwen 27B + vision, 64K, `q4_0` | 15203 MiB | 15202 MiB | 50.8 tok/s |
-| Qwen 27B no vision, 128K, `q4_0` | 15063 MiB | 15076 MiB | 50.3 tok/s |
-| Gemma 4 E4B + vision + MTP, 128K, `q4_1` | 6758 MiB | 4676 MiB | 89.1 tok/s |
+| Qwen 27B + vision, 64K | 15203 MiB | 15202 MiB | 50.8 tok/s |
+| Qwen 27B no vision, 128K | 15063 MiB | 15076 MiB | 50.3 tok/s |
+| Gemma 4 E4B + vision, 128K | 4611 MiB | 4610 MiB | 89.1 tok/s |
+| Gemma 4 12B no vision, 256K | 8132 MiB | 8132 MiB | — |
+| Gemma 4 12B + vision, 64K | 7516 MiB | 7516 MiB | — |
+| Gemma 4 26B-A4B + vision, 64K | 15644 MiB | 15644 MiB | — |
 
-A 27B at Q3 running entirely on the GPU with the vision encoder loaded, and the whole Gemma pipeline including a speculative draft model.
+Across 12 Gemma configurations spanning three models, two vision settings and context lengths from 64K to 256K, the **worst error is 1 MiB**.
 
-The overhead constants (256 MiB base, 448 MiB extra with vision) were calibrated against Qwen and predict it to within 15 MiB. **On Gemma the estimate runs about 30 % high** — `shared_kv_layers` is not subtracted and Gemma's vision encoder is lighter than Qwen's. The error is deliberately on the safe side: `FITS` is never claimed for something that does not fit, but `TOO BIG` can be pessimistic on Gemma. Calibrating the Gemma constants is on the roadmap.
+Getting there took two corrections that no amount of reading the header would have produced:
+
+- **Gemma 4 E4B holds fewer KV caches than its header implies.** The arithmetic says 7 full-attention layers; the measured delta between 64K and 128K says 4. `shared_kv_layers = 18` is why — three of the seven reuse another layer's cache. The header states how many layers share, never which, so only measurement resolves it.
+- **E4B keeps about 1.2 GB of its weights in system RAM.** It is a MatFormer: its per-layer embeddings never become resident on the GPU. Its calibrated base overhead is therefore *negative*, which is the honest way to encode "part of this file is not in VRAM".
+
+Overhead constants per model, all measured:
+
+| Model | Base | With vision |
+| --- | --- | --- |
+| Qwen (both) | 256 MiB | +448 MiB |
+| Gemma 4 E4B | −1207 MiB | +202 MiB |
+| Gemma 4 12B | 347 MiB | +177 MiB |
+| Gemma 4 26B-A4B | 313 MiB | +142 MiB |
+
+Gemma's vision encoder costs roughly a third of what Qwen's does in compute buffers. A model with no measured values falls back to the defaults in `config/server.json`.
 
 ---
 
@@ -404,7 +425,6 @@ Get-Process llama-server | Stop-Process -Force
 
 - macOS on Apple Silicon (Metal backend, unified memory budgeting)
 - Linux (CUDA / ROCm / Vulkan)
-- Calibrate the overhead constants per architecture (they are Qwen-derived today)
 - More models in the catalog
 
 ---
