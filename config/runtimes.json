@@ -1,0 +1,22 @@
+{
+  "node": {
+    "name": "Node.js 24 (portable)",
+    "folder": "node",
+    "entrypoint": "node.exe",
+    "required": true,
+    "tree": {
+      "files": 1989,
+      "bytes": 106112876
+    }
+  },
+  "pi": {
+    "name": "Pi coding agent",
+    "folder": "pi",
+    "entrypoint": "node_modules/@earendil-works/pi-coding-agent/dist/cli.js",
+    "required": true,
+    "tree": {
+      "files": 13211,
+      "bytes": 107234942
+    }
+  }
+}

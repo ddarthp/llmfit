@@ -1,0 +1,32 @@
+{
+  "host": "127.0.0.1",
+  "port": 8080,
+  "_budgetComment": "The 'free' value reported by llama-server --list-devices is static: it does not reflect what other processes are using. The budget is therefore total minus the driver reserve, assuming an idle GPU. Measured example: 16303 total - 308 reserved = 15995, identical to nvidia-smi 'free' at idle.",
+  "deviceReserveMiB": 320,
+  "_cacheComment": "KV cache types supported by llama.cpp with their bytes per element. q4_1 = 20 bytes per block of 32; q4_0 = 18. Dropping to q4_0 buys about 10% more context at a small quality cost.",
+  "cacheType": "q4_1",
+  "cacheTypeBytes": {
+    "f16": 2,
+    "q8_0": 1.0625,
+    "q5_1": 0.75,
+    "q5_0": 0.6875,
+    "q4_1": 0.625,
+    "q4_0": 0.5625
+  },
+  "_overheadComment": "Calibrated against nvidia-smi measurements on a 16 GB GPU with the 27B model: predicts real usage to within 15 MiB.",
+  "computeOverheadMiB": 256,
+  "visionOverheadMiB": 448,
+  "contextOptions": [
+    65536,
+    131072,
+    262144
+  ],
+  "harness": {
+    "piProvider": "llama-cpp",
+    "openCodeProvider": "llamacpp",
+    "codexProfile": "llama-local",
+    "piPackages": [],
+    "piPackagesRetired": [],
+    "_packagesComment": "Pi INSTALLS every registered package at startup; if one fails to build, Pi will not open. That is why piPackages is empty: install your extensions yourself, on the harness you choose. piPackagesRetired de-registers packages an earlier launcher version may have injected."
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "cuda13": {
+    "name": "NVIDIA CUDA 13.3 (GeForce RTX 20/30/40/50, Quadro, Tesla)",
+    "folder": "llama.cpp-cuda13",
+    "gpuLayers": 999,
+    "tree": {
+      "files": 56,
+      "bytes": 702102125
+    },
+    "archives": [
+      {
+        "file": "llama-cuda13.zip",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10566/llama-b10566-bin-win-cuda-13.3-x64.zip",
+        "sha256": "c3e2336c1427e8bd7b5beb3c8618d2f7a268bc5fb6ec3f28c1e06cdb78d2e80a"
+      },
+      {
+        "file": "cudart-cuda13.zip",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10566/cudart-llama-bin-win-cuda-13.3-x64.zip",
+        "sha256": "1462a050eb4c684921ba51dcc4cc488a036674c3e73e9945ee705b854808d03e"
+      }
+    ]
+  },
+  "vulkan": {
+    "name": "Vulkan (AMD, Intel and NVIDIA; recommended for APUs and integrated GPUs)",
+    "folder": "llama.cpp",
+    "gpuLayers": 999,
+    "tree": {
+      "files": 53,
+      "bytes": 101939997
+    },
+    "archives": [
+      {
+        "file": "llama-vulkan.zip",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10566/llama-b10566-bin-win-vulkan-x64.zip",
+        "sha256": "68e15a0a0d07df55a695ec4d81465cf57400431d54ae19fadcb51dc919724042"
+      }
+    ]
+  },
+  "cpu": {
+    "name": "CPU x64 (no acceleration; considerably slower)",
+    "folder": "llama.cpp-cpu",
+    "gpuLayers": 0,
+    "tree": {
+      "files": 52,
+      "bytes": 47585565
+    },
+    "archives": [
+      {
+        "file": "llama-cpu.zip",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10566/llama-b10566-bin-win-cpu-x64.zip",
+        "sha256": "594f822c829ea097e1f0528a2b5b9f9953dd00254b48c44438104ddfb87a1ab9"
+      }
+    ]
+  }
+}

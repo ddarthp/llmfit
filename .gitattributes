@@ -1,0 +1,6 @@
+# Normalize to LF inside the repository.
+* text=auto eol=lf
+
+# Windows launchers keep CRLF in the working tree.
+*.cmd text eol=crlf
+*.bat text eol=crlf

@@ -1,0 +1,16 @@
+# Models and binaries: ~23 GB. These never go into Git. They are downloaded on
+# first use and verified by SHA-256 from config/models.json and config/backends.json.
+models/
+downloads/
+tools/
+.gopath/
+
+# Local runtime state
+.atl/
+.pi/
+llama-server.pid
+llama-server.log
+llama-server.err.log
+
+# Backups llmfit.ps1 makes before touching your harness configuration
+*.llmfit-backup
