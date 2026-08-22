@@ -6,32 +6,14 @@
 # a local server that is usually switched off. The model is chosen per
 # invocation, with a flag.
 
-# Keys starting with '_' are documentation inside the catalog, not models.
-function Get-CatalogKeys {
-  param([System.Collections.IDictionary]$Catalog)
-  return @($Catalog.Keys | Where-Object { -not $_.StartsWith('_') })
-}
-
-function Get-ProviderModelList {
-  param([System.Collections.IDictionary]$Catalog)
-  $models = @()
-  foreach ($key in (Get-CatalogKeys -Catalog $Catalog)) {
-    $item = $Catalog[$key]
-    $models += [ordered]@{
-      id = $item.alias
-      name = $item.name
-      reasoning = $true
-      input = @('text', 'image')
-      contextWindow = $item.geometry.maxContext
-      maxTokens = $item.maxTokens
-      cost = [ordered]@{ input = 0; output = 0; cacheRead = 0; cacheWrite = 0 }
-    }
-  }
-  return $models
-}
+# Only the model that is actually loaded gets registered, with the context the
+# server was actually started with. Advertising the whole catalog would be a
+# lie twice over: the server holds one model at a time, and declaring a model's
+# maximum context when 64K was loaded makes the harness plan for a window that
+# does not exist.
 
 function Configure-Pi {
-  param([System.Collections.IDictionary]$Catalog, [string]$ApiBase, $ServerConfig)
+  param($Model, [int]$Context, [string]$ApiBase, $ServerConfig)
   $providerKey = $ServerConfig.harness.piProvider
   $directory = Join-Path $env:USERPROFILE '.pi\agent'
   New-Item -ItemType Directory -Force -Path $directory | Out-Null
@@ -47,7 +29,15 @@ function Configure-Pi {
     api = 'openai-completions'
     apiKey = 'none'
     compat = [ordered]@{ supportsDeveloperRole = $false; supportsReasoningEffort = $false }
-    models = @(Get-ProviderModelList -Catalog $Catalog)
+    models = @([ordered]@{
+      id = $Model.alias
+      name = $Model.name
+      reasoning = $true
+      input = @('text', 'image')
+      contextWindow = $Context
+      maxTokens = $Model.maxTokens
+      cost = [ordered]@{ input = 0; output = 0; cacheRead = 0; cacheWrite = 0 }
+    })
   }
   Write-Utf8NoBom -Path $path -Content ($config | ConvertTo-Json -Depth 12)
 
@@ -74,14 +64,13 @@ function Configure-Pi {
   }
 
   # Undo the global override that earlier versions used to apply.
-  $aliases = @((Get-CatalogKeys -Catalog $Catalog) | ForEach-Object { $Catalog[$_].alias })
   if ($settings.Contains('defaultProvider') -and $settings.defaultProvider -eq $providerKey) { $settings.Remove('defaultProvider') }
-  if ($settings.Contains('defaultModel') -and $aliases -contains $settings.defaultModel) { $settings.Remove('defaultModel') }
+  if ($settings.Contains('defaultModel') -and $settings.defaultModel -eq $Model.alias) { $settings.Remove('defaultModel') }
   Write-Utf8NoBom -Path $settingsPath -Content ($settings | ConvertTo-Json -Depth 12)
 }
 
 function Configure-OpenCode {
-  param([System.Collections.IDictionary]$Catalog, [string]$ApiBase, $ServerConfig)
+  param($Model, [int]$Context, [string]$ApiBase, $ServerConfig)
   $providerKey = $ServerConfig.harness.openCodeProvider
   $directory = Join-Path $env:USERPROFILE '.config\opencode'
   $path = Join-Path $directory 'opencode.json'
@@ -92,21 +81,18 @@ function Configure-OpenCode {
   } else { $config = [ordered]@{ '$schema' = 'https://opencode.ai/config.json' } }
   if (-not $config.Contains('provider')) { $config.provider = [ordered]@{} }
 
+  # tool_call and attachment are mandatory: without them OpenCode does not hand
+  # tools to the model and does not allow image attachments, leaving it as a
+  # plain chat.
   $models = [ordered]@{}
-  foreach ($key in (Get-CatalogKeys -Catalog $Catalog)) {
-    $item = $Catalog[$key]
-    # tool_call and attachment are mandatory: without them OpenCode does not
-    # hand tools to the model and does not allow image attachments, leaving it
-    # as a plain chat.
-    $models[$item.alias] = [ordered]@{
-      name = $item.name
-      reasoning = $true
-      tool_call = $true
-      attachment = $true
-      modalities = [ordered]@{ input = @('text', 'image'); output = @('text') }
-      limit = [ordered]@{ context = $item.geometry.maxContext; output = $item.maxTokens }
-      options = [ordered]@{ temperature = 0.6; topP = 0.95 }
-    }
+  $models[$Model.alias] = [ordered]@{
+    name = $Model.name
+    reasoning = $true
+    tool_call = $true
+    attachment = $true
+    modalities = [ordered]@{ input = @('text', 'image'); output = @('text') }
+    limit = [ordered]@{ context = $Context; output = $Model.maxTokens }
+    options = [ordered]@{ temperature = 0.6; topP = 0.95 }
   }
   $config.provider[$providerKey] = [ordered]@{
     npm = '@ai-sdk/openai-compatible'
@@ -135,7 +121,7 @@ function Set-ManagedBlock {
 }
 
 function Configure-Codex {
-  param([System.Collections.IDictionary]$Catalog, [string]$ApiBase, $ServerConfig)
+  param($Model, [int]$Context, [string]$ApiBase, $ServerConfig)
   $profileName = $ServerConfig.harness.codexProfile
   $directory = Join-Path $env:USERPROFILE '.codex'
   New-Item -ItemType Directory -Force -Path $directory | Out-Null
@@ -145,7 +131,6 @@ function Configure-Codex {
   $orphan = Join-Path $directory 'llama-local.config.toml'
   if (Test-Path -LiteralPath $orphan) { Remove-Item -LiteralPath $orphan -Force }
 
-  $first = $Catalog[(Get-CatalogKeys -Catalog $Catalog)[0]]
   $content = @"
 [model_providers.llama-cpp]
 name = "llama.cpp local"
@@ -155,9 +140,9 @@ requires_openai_auth = false
 stream_idle_timeout_ms = 600000
 
 [profiles.$profileName]
-model = "$($first.alias)"
+model = "$($Model.alias)"
 model_provider = "llama-cpp"
-model_context_window = $($first.geometry.maxContext)
+model_context_window = $Context
 model_supports_reasoning_summaries = false
 model_reasoning_summary = "none"
 "@

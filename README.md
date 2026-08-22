@@ -90,7 +90,7 @@ Enter accepts the highlighted option in each step.
      no GPU: uses system RAM
 ```
 
-**Usable** is total minus the driver reserve, assuming the GPU is otherwise idle.
+**Usable** is what the card will actually give you. On NVIDIA that is `nvidia-smi`'s live free memory whenever it is lower than the nominal figure, so a browser or a model someone else left running is accounted for instead of silently overcommitted. Otherwise it is total minus the driver reserve.
 
 > The `free` value reported by `llama-server --list-devices` is deliberately *not* used: it is static. It returns the same number with an empty GPU and with 15 GB in use. Only `total` is trustworthy.
 
@@ -167,7 +167,8 @@ Decided automatically, and it tells you why:
   - **Embedded** — Qwen 3.8 27B carries `nextn_predict_layers = 1` inside the model file.
   - **Separate draft model** — every Gemma 4 ships an `mtp-*.gguf` companion, downloaded on demand and passed with `--spec-draft-model`.
 - Only on CUDA. On Vulkan the cost of maintaining the draft context cancels the gain.
-- Only if at least 1 GiB is left after everything else is loaded, plus the draft model's own weight where one is used.
+- Only if its measured cost fits in what is left, with a margin. See the [table above](#reference-measurements) for what each model charges.
+- Only if the catalog lets it. `mtp.autoEnable: false` turns it off for a model regardless. **The Qwen 27B ships with it off**: on a 16 GB card that model already sits near the ceiling, and 1200 MiB more leaves nothing for anything else touching the GPU. Set it to `true` if your card has room.
 
 When it is off, `--spec-type none` is passed explicitly. A state shown on screen should be controlled by the launcher, not inherited from a default that can change between releases.
 
@@ -369,14 +370,16 @@ Every model in the catalog has been measured against `nvidia-smi` on a 16 GB NVI
 
 | Configuration | Estimated | VRAM used | Generation |
 | --- | --- | --- | --- |
-| Qwen 27B + vision, 64K | 15203 MiB | 15202 MiB | 50.8 tok/s |
-| Qwen 27B no vision, 128K | 15063 MiB | 15076 MiB | 50.3 tok/s |
+| Qwen 27B + vision, 64K | 14564 MiB | 14564 MiB | 50.8 tok/s |
+| Qwen 27B no vision, 128K | 14708 MiB | 14708 MiB | — |
+| Qwen 9B + vision, 64K | 8424 MiB | 8424 MiB | — |
 | Gemma 4 E4B + vision, 128K | 4611 MiB | 4610 MiB | 89.1 tok/s |
 | Gemma 4 12B no vision, 256K | 8132 MiB | 8132 MiB | — |
-| Gemma 4 12B + vision, 64K | 7516 MiB | 7516 MiB | — |
 | Gemma 4 26B-A4B + vision, 64K | 15644 MiB | 15644 MiB | — |
 
-Across 12 Gemma configurations spanning three models, two vision settings and context lengths from 64K to 256K, the **worst error is 1 MiB**.
+Across 18 configurations spanning all five models, two vision settings and context lengths from 64K to 256K, the **worst error is 1 MiB**.
+
+Every figure comes from running `serve.ps1` itself and reading `nvidia-smi`, never from an ad-hoc `llama-server` invocation. That matters: an earlier round of Qwen constants was fitted to hand-written commands that omitted `--parallel 1` and `--image-min-tokens`, and it overestimated by 800 MiB.
 
 Getting there took two corrections that no amount of reading the header would have produced:
 
@@ -385,14 +388,17 @@ Getting there took two corrections that no amount of reading the header would ha
 
 Overhead constants per model, all measured:
 
-| Model | Base | With vision |
-| --- | --- | --- |
-| Qwen (both) | 256 MiB | +448 MiB |
-| Gemma 4 E4B | −1207 MiB | +202 MiB |
-| Gemma 4 12B | 347 MiB | +177 MiB |
-| Gemma 4 26B-A4B | 313 MiB | +142 MiB |
+| Model | Base | With vision | MTP |
+| --- | --- | --- | --- |
+| Qwen 3.5 9B | −455 MiB | +251 MiB | — |
+| Qwen 3.8 27B | −389 MiB | +251 MiB | +1200 MiB, embedded |
+| Gemma 4 E4B | −1207 MiB | +202 MiB | +66 MiB, draft model |
+| Gemma 4 12B | +347 MiB | +177 MiB | +294 MiB, draft model |
+| Gemma 4 26B-A4B | +313 MiB | +142 MiB | +292 MiB, estimated |
 
-Gemma's vision encoder costs roughly a third of what Qwen's does in compute buffers. A model with no measured values falls back to the defaults in `config/server.json`.
+A negative base means part of the file never reaches VRAM: metadata and tokenizer tables are counted in the file size, and for the 27B so are the `blk.64` tensors llama.cpp skips when MTP is off. A model with no measured values falls back to the defaults in `config/server.json`, which stay deliberately pessimistic.
+
+**MTP is charged what it actually costs**, and the two shapes are an order of magnitude apart. An embedded draft context is built against the whole model — 1200 MiB on the 27B — while a companion draft file costs little more than its own weight. Counting it as free is how a configuration reports `FITS` and then spills into system RAM, where prompt processing collapses from hundreds of tokens per second to tens.
 
 ---
 
@@ -424,6 +430,8 @@ powershell -ExecutionPolicy Bypass -File verify.ps1 -Full   # require the whole 
 **My GPU is not detected.** Set `LLMFIT_DEBUG=1` to see the raw `llama-server --list-devices` output per backend.
 
 **It says TIGHT and I want headroom.** Lower `cacheType` to `q4_0` in `config/server.json`, or pick the no-vision variant.
+
+**It loaded, but generation crawls and prompt processing is in the tens of tokens per second.** It overflowed and llama.cpp is running layers from system RAM. Free the card — a browser with hardware acceleration costs hundreds of megabytes — and pick a smaller context or drop vision. `llmfit` reads live free VRAM on NVIDIA, so re-running it after closing things will report a larger budget.
 
 **"A local llama-server is already running."** Answer `Y` to replace it, or `n` to keep using the one already up.
 

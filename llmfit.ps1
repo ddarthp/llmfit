@@ -165,6 +165,21 @@ function Get-BackendDevices {
   return $devices
 }
 
+function Get-LiveFreeMiB {
+  # nvidia-smi reports free memory as it is right now. llama.cpp's
+  # --list-devices does not: its 'free' is static and ignores every other
+  # process. Preferring the live number is what stops the fit table from
+  # promising memory a browser or another model already took.
+  try {
+    $raw = & nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>$null
+    if ($LASTEXITCODE -eq 0 -and $raw) {
+      $values = @($raw | ForEach-Object { [double]($_.ToString().Trim()) } | Where-Object { $_ -gt 0 })
+      if ($values.Count) { return ($values | Measure-Object -Maximum).Maximum }
+    }
+  } catch {}
+  return $null
+}
+
 function Format-MiB {
   param([double]$MiB)
   if ($MiB -ge 1024) { return ('{0:N1} GiB' -f ($MiB / 1024)) }
@@ -282,15 +297,25 @@ if (-not $selected.Devices.Count -and $backendKey -ne 'cpu') {
   if ($selected.Devices.Count) { $selected.BudgetMiB = ($selected.Devices | Measure-Object -Property TotalMiB -Maximum).Maximum - $deviceReserveMiB }
 }
 $budgetMiB = $selected.BudgetMiB
-$budgetLabel = if ($selected.Devices.Count) {
-  $best = $selected.Devices | Sort-Object TotalMiB -Descending | Select-Object -First 1
+$budgetSource = 'total minus driver reserve'
+$best = if ($selected.Devices.Count) { $selected.Devices | Sort-Object TotalMiB -Descending | Select-Object -First 1 } else { $null }
+if ($best -and $best.Name -match 'NVIDIA') {
+  $live = Get-LiveFreeMiB
+  # Only trust the live figure when it is lower: it means something else is on
+  # the card and we would otherwise overcommit.
+  if ($null -ne $live -and $live -lt $budgetMiB) {
+    $budgetMiB = $live
+    $budgetSource = 'free right now, other processes are using the card'
+  }
+}
+$budgetLabel = if ($best) {
   "$($best.Id) ($($best.Name)), $(Format-MiB $budgetMiB) usable"
 } else { "system RAM, $(Format-MiB $budgetMiB)" }
 
 # ------------------------------------------------------ 2. MODEL AND VISION
 
 Write-Step 2 'MODEL'
-Write-Host "  Budget: $budgetLabel" -ForegroundColor DarkGray
+Write-Host "  Budget: $budgetLabel  [$budgetSource]" -ForegroundColor DarkGray
 Write-Host ''
 
 $variants = @()
@@ -378,14 +403,18 @@ $contextSize = $contextEntry.Context
 
 # MTP only pays off on CUDA: on Vulkan the cost of maintaining the draft
 # context cancels out the gain. And only if the model ships nextn layers.
-# A separate draft model has to fit in memory too, on top of the working
-# headroom, so its size is added to what MTP costs.
-$mtpHeadroomMiB = 1024
-if ($model.mtp -and $model.mtp.bytes) { $mtpHeadroomMiB += [double]$model.mtp.bytes / 1MB }
+# What MTP costs is measured per model and differs by an order of magnitude:
+# an embedded draft context is built against the whole model, a companion draft
+# file is small. Counting it as free is how a configuration that reports FITS
+# ends up spilling into system RAM.
+$mtpCostMiB = if ($model.mtp -and $model.mtp.costMiB) { [double]$model.mtp.costMiB } else { 512 }
+$mtpHeadroomMiB = $mtpCostMiB + 256
 $useMtp = $false
 $mtpReason = ''
 if (-not $model.mtp) {
   $mtpReason = "this model ships no MTP layers"
+} elseif ($model.mtp.autoEnable -eq $false) {
+  $mtpReason = "turned off for this model in config/models.json"
 } elseif ($backendKey -notlike 'cuda*') {
   $mtpReason = "only enabled on CUDA (you picked $backendKey)"
 } elseif (($budgetMiB - $contextEntry.TotalMiB) -lt $mtpHeadroomMiB) {
@@ -393,11 +422,11 @@ if (-not $model.mtp) {
   $mtpReason = if ($margin -lt 0) {
     "this configuration already exceeds VRAM by $(Format-MiB ([math]::Abs($margin)))"
   } else {
-    "only $(Format-MiB $margin) left over, $(Format-MiB $mtpHeadroomMiB) needed"
+    "it costs $(Format-MiB $mtpCostMiB) and only $(Format-MiB $margin) is left over"
   }
 } else {
   $useMtp = $true
-  $mtpReason = "CUDA with $(Format-MiB ($budgetMiB - $contextEntry.TotalMiB)) of headroom"
+  $mtpReason = "costs $(Format-MiB $mtpCostMiB), leaving $(Format-MiB ($budgetMiB - $contextEntry.TotalMiB - $mtpCostMiB)) free"
 }
 
 Write-Step 4 'SPECULATIVE DECODING (MTP)'
@@ -441,7 +470,7 @@ if ($chosen -and -not $chosen.Supported) {
 if ($chosen -and $chosen.Configure) {
   Write-Host ''
   Write-Host "  Registering the local provider in $($chosen.Name)..." -ForegroundColor Cyan
-  & $chosen.Configure $catalog $apiBase $serverConfig
+  & $chosen.Configure $model $contextSize $apiBase $serverConfig
 }
 
 # ---------------------------------------------------------- start the server
@@ -490,7 +519,9 @@ Write-Host "  $('=' * 62)" -ForegroundColor Green
 Write-Host "  Model     : $($model.alias)  ($(if ($useVision) { 'with vision' } else { 'no vision' }))"
 Write-Host "  Backend   : $backendKey  -  $budgetLabel"
 Write-Host "  Context   : $($contextSize / 1024)K   (KV $cacheType, $(Format-MiB $contextEntry.KvMiB))"
-Write-Host "  MTP       : $(if ($useMtp) { 'enabled' } else { 'disabled' })"
+$finalMiB = $contextEntry.TotalMiB + $(if ($useMtp) { $mtpCostMiB } else { 0 })
+Write-Host "  MTP       : $(if ($useMtp) { "enabled (+$(Format-MiB $mtpCostMiB))" } else { 'disabled' })"
+Write-Host "  Estimated : $(Format-MiB $finalMiB) of $(Format-MiB $budgetMiB) usable"
 Write-Host "  API       : $apiBase"
 Write-Host "  Chat UI   : $apiRoot  (built into llama.cpp, always available)"
 Write-Host '  The server stays in its own window. Leave it open.' -ForegroundColor DarkGray

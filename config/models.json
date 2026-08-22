@@ -27,6 +27,11 @@
       },
       "summary": "hybrid attention/SSM: 8 of 32 layers hold a KV cache"
     },
+    "overhead": {
+      "_comment": "Measured through serve.ps1 at 64K and 256K, vision on and off. The implied overhead is identical at both context lengths, which confirms the KV coefficient. It is negative because the GGUF file is larger than what ends up resident: metadata and tokenizer tables are counted in the file size but never reach VRAM.",
+      "baseMiB": -455,
+      "visionMiB": 251
+    },
     "note": "Stable. No MTP: the GGUF carries no nextn_predict_layers."
   },
   "qwen38-27b": {
@@ -41,7 +46,11 @@
     "mmprojSha256": "cbb841a9ee0636b2ec172f5bb8df2ea8dfeb01e90fe7c6126581d662a0b4e43e",
     "imageMinTokens": 1024,
     "mtp": {
-      "mode": "embedded"
+      "mode": "embedded",
+      "costMiB": 1200,
+      "_costComment": "Measured. Embedded MTP builds a draft context against the full model, so it costs far more than a small companion file: 13428 MiB without it, 14628 with, at 64K.",
+      "autoEnable": false,
+      "_autoEnableComment": "Turned off by choice. On a 16 GB card this model already sits near the ceiling: with vision at 64K it needs 14720 MiB and MTP would add 1200 more, leaving about 60 MiB. Anything else touching the GPU pushes it into system RAM, where prompt processing collapses. Set this to true on a card with room to spare."
     },
     "geometry": {
       "kvElementsPerToken": 32768,
@@ -60,6 +69,11 @@
       },
       "summary": "hybrid attention/SSM: 16 of 65 layers hold a KV cache"
     },
+    "overhead": {
+      "_comment": "Measured through serve.ps1 at 64K and 128K, vision on and off. Identical overhead at both lengths confirms the KV coefficient. Negative for the same reason as the 9B, plus the blk.64 tensors that llama.cpp skips when MTP is off.",
+      "baseMiB": -389,
+      "visionMiB": 251
+    },
     "note": "Unsloth Q3. MTP layers are embedded in the model file."
   },
   "gemma4-e4b": {
@@ -77,7 +91,8 @@
       "file": "mtp-gemma-4-E4B-it.gguf",
       "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-qat-GGUF/resolve/main/mtp-gemma-4-E4B-it.gguf?download=true",
       "sha256": "423074e537504b4f9ec5eafed5c639fac82c96631626efccacdd3c4039b20605",
-      "bytes": 59678016
+      "costMiB": 66,
+      "_costComment": "Measured: 4610 MiB without, 4676 with. A 57 MB draft model plus its context."
     },
     "geometry": {
       "kvElementsPerToken": 8192,
@@ -123,7 +138,8 @@
       "file": "mtp-gemma-4-12B-it.gguf",
       "url": "https://huggingface.co/unsloth/gemma-4-12B-it-qat-GGUF/resolve/main/mtp-gemma-4-12B-it.gguf?download=true",
       "sha256": "fcb35dea42c71333db904cee11baac525c9ef872818ee3753f6cb156f3c6f4f6",
-      "bytes": 253708800
+      "costMiB": 294,
+      "_costComment": "Measured: 7492 MiB without, 7786 with, at 128K. That is the 242 MB draft model plus 52 MiB of context."
     },
     "geometry": {
       "kvElementsPerToken": 8192,
@@ -169,7 +185,8 @@
       "file": "mtp-gemma-4-26B-A4B-it.gguf",
       "url": "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-qat-GGUF/resolve/main/mtp-gemma-4-26B-A4B-it.gguf?download=true",
       "sha256": "7272d97595f0d4c74bd7b623492b7dbdaafd8b7c72f329a8270ba4eca68f768a",
-      "bytes": 251939328
+      "costMiB": 292,
+      "_costComment": "Estimated from the 12B: same 240 MB draft size, so the same shape of cost. Not measured, because MTP never fits on a 16 GB card with this model."
     },
     "geometry": {
       "kvElementsPerToken": 10240,
