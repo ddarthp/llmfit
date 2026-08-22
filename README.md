@@ -105,6 +105,8 @@ Turning vision off skips the `mmproj` file and saves roughly a gigabyte of weigh
 
 ### 3. Context
 
+The table is computed for the model and vision setting you just chose, against the budget of the device you picked. Here is the tightest case — the 27B with vision on a 16 GB card:
+
 ```
 KV quantized to q4_1 (0.625 bytes per element).
 Only 16 of 65 layers hold KV: this is a hybrid attention/SSM model.
@@ -113,6 +115,8 @@ Only 16 of 65 layers hold KV: this is a hybrid attention/SSM model.
 2)  128K   KV  2.5 GiB   estimated total  16.3 GiB   TOO BIG
 3)  256K   KV  5.0 GiB   estimated total  18.8 GiB   TOO BIG
 ```
+
+The same card running the 9B with vision reports `FITS` at all three lengths, topping out at 11.0 GiB for 256K.
 
 **This is the part most tools get wrong.** Qwen 3.5 and 3.8 are **hybrid attention/SSM** models. Their GGUF header carries `full_attention_interval = 4`: only one layer in four keeps a KV cache. The other three are SSM layers whose state is a fixed size that does not grow with context.
 
@@ -151,9 +155,17 @@ When it is off, `--spec-type none` is passed explicitly. A state shown on screen
 ```
 1) Pi          [installed]      OpenAI chat
 2) OpenCode    [installed]      OpenAI chat
-3) Codex       [not installed]  OpenAI responses
+3) Codex       [installed]      OpenAI responses
 4) None, server only
 ```
+
+All three are supported. The bracket reports what was detected on *your* machine:
+
+| Tag | Meaning |
+| --- | --- |
+| `[installed]` | The command is on your `PATH` and ready to use |
+| `[not installed]` | Not found on `PATH`; install it and run `llmfit` again |
+| `[incompatible]` | Installed, but this model's chat template rejects how that harness builds requests. The reason is printed next to it |
 
 Pick one. `llmfit` registers the local provider in that tool's configuration and leaves the command on screen and in your clipboard:
 
