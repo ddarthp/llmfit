@@ -22,9 +22,11 @@ No install step, no build, no Git needed on the target machine. Copy the folder,
 - [Models](#models)
 - [Configuration](#configuration)
 - [Living alongside your cloud providers](#living-alongside-your-cloud-providers)
+- [Reference measurements](#reference-measurements)
 - [Moving the package to another machine](#moving-the-package-to-another-machine)
 - [Troubleshooting](#troubleshooting)
 - [Roadmap](#roadmap)
+- [License](#license)
 
 ---
 
@@ -50,7 +52,7 @@ The result is a fit table you can trust *before* you wait three minutes for a 13
 | OS | Windows 10 / 11 (x64) |
 | PowerShell | 5.1, the one bundled with Windows |
 | GPU | Optional. NVIDIA via CUDA, AMD/Intel via Vulkan, or CPU only |
-| Disk | ~7 GB for the smallest model, ~23 GB for the full catalog |
+| Disk | 4.2 GB for the smallest model without vision, ~51 GB for the whole catalog |
 | Network | Only on first run, to download the model and the backend |
 
 Nothing else. Node.js and Pi are optional and only needed if you want the bundled portable copies.
@@ -271,8 +273,9 @@ No weights, no binaries, no encoders. They are downloaded on first use and verif
 
 | What | Where it comes from | Size |
 | --- | --- | --- |
-| Model weights (`.gguf`) | Hugging Face — `unsloth/Qwen3.5-9B-GGUF`, `unsloth/Qwen3.8-27B-GGUF` | 7–13 GB each |
-| Vision encoders (`mmproj`) | Same Hugging Face repositories | ~880 MB each |
+| Model weights (`.gguf`) | Hugging Face — `unsloth/Qwen3.5-9B-GGUF`, `unsloth/Qwen3.8-27B-GGUF`, `unsloth/gemma-4-*-it-qat-GGUF` | 4.2–14.3 GB each |
+| Vision encoders (`mmproj`) | The same repositories | 175 MB – 1.2 GB each |
+| Speculative draft models (`mtp-*.gguf`) | The same repositories | 57–254 MB, only fetched when MTP is enabled |
 | `llama.cpp` binaries | Official GitHub release artifacts (`ggml-org/llama.cpp`, build `b10566`) | 18–510 MB |
 
 These paths are ignored by Git and never committed:
@@ -285,6 +288,25 @@ llama-server.*        .atl/        .pi/        *.llmfit-backup
 Model weights belong to their respective publishers under their own licenses.
 
 ---
+
+## Models
+
+| Model | Catalog key | Weights | Vision | KV at 128K | Max context | MTP |
+| --- | --- | --- | --- | --- | --- | --- |
+| Gemma 4 E4B QAT | `gemma4-e4b` | 4.22 GB | 990 MB | 0.64 GiB | 128K | draft model |
+| Gemma 4 12B QAT | `gemma4-12b` | 6.72 GB | 175 MB | 0.72 GiB | 256K | draft model |
+| Qwen 3.5 9B Q6_K | `qwen35-9b` | 7.46 GB | 876 MB | 1.25 GiB | 256K | — |
+| Qwen 3.8 27B UD-Q3_K_XL | `qwen38-27b` | 13.15 GB | 885 MB | 2.50 GiB | 256K | embedded |
+| Gemma 4 26B-A4B QAT | `gemma4-26b-a4b` | 14.25 GB | 1.19 GB | 0.84 GiB | 256K | draft model |
+
+All of them are Unsloth quantizations with an optional vision encoder. KV figures are at the default `q4_1`. The whole catalog, weights plus encoders plus draft models, is about 51 GB on disk — you only ever download what you pick.
+
+Two things worth reading off that table:
+
+- **The 26B-A4B has the heaviest weights and the lightest KV cache.** It is a mixture of experts: 8 of 128 experts run per token but all 128 must be resident, so you pay the full 14.25 GB for weights while its 5 context-scaling layers keep the cache tiny. On a 16 GB card it fits with vision at 64K, with about 350 MiB to spare.
+- **The E4B's KV figure is measured, not derived.** Its header implies 1.10 GiB at 128K; the card says 0.64 GiB. `shared_kv_layers = 18` is the reason, and the header never says which layers share, so the catalog carries the measured coefficient.
+
+To add your own model, put an entry in `config/models.json` with its URL, SHA-256 and the two KV coefficients derived from its GGUF header. Every existing entry records its derivation — and, where measurement disagreed with the header, what was measured and why — in a `detail` block.
 
 ## Configuration
 
@@ -328,22 +350,6 @@ Every file `llmfit` touches is backed up next to the original as `.llmfit-backup
 `piPackages` in `config/server.json` is **empty on purpose**. Pi *installs* every registered package at startup, and if one fails to build, Pi will not open. Install your extensions yourself, on the harness you choose.
 
 ---
-
-## Models
-
-| Model | Catalog key | Weights | KV at 128K | Max context | MTP |
-| --- | --- | --- | --- | --- | --- |
-| Gemma 4 E4B QAT | `gemma4-e4b` | 4.22 GB | 1.10 GiB | 128K | draft model |
-| Gemma 4 12B QAT | `gemma4-12b` | 6.72 GB | 0.72 GiB | 256K | draft model |
-| Qwen 3.5 9B Q6_K | `qwen35-9b` | 7.46 GB | 1.25 GiB | 256K | — |
-| Qwen 3.8 27B UD-Q3_K_XL | `qwen38-27b` | 13.15 GB | 2.50 GiB | 256K | embedded |
-| Gemma 4 26B-A4B QAT | `gemma4-26b-a4b` | 14.25 GB | 0.84 GiB | 256K | draft model |
-
-All of them are Unsloth quantizations with an optional vision encoder. KV figures are at the default `q4_1`.
-
-Note the ordering: the 26B-A4B has the **heaviest weights and the lightest KV cache** in the catalog. It is a mixture of experts — 8 of 128 experts run per token, but all 128 have to be resident, so you pay the full 14.25 GB for weights while its 5 context-scaling layers keep the cache tiny.
-
-To add your own model, put an entry in `config/models.json` with its URL, SHA-256 and the two KV coefficients derived from its GGUF header. Each existing entry records the derivation in a `detail` block so you can copy the reasoning.
 
 ## Reference measurements
 
@@ -393,7 +399,7 @@ powershell -ExecutionPolicy Bypass -File verify.ps1 -Full   # require the whole 
 
 **Then:**
 
-1. Copy the whole folder to the stick. With both models it is around 23 GB, so the stick needs at least 32 GB formatted **exFAT or NTFS** — FAT32 cannot hold files over 4 GB and every GGUF here is larger.
+1. Copy the whole folder to the stick. A full catalog runs to about 52 GB with the backends, so size the stick for what you actually keep, and format it **exFAT or NTFS** — FAT32 cannot hold files over 4 GB and every GGUF here is larger.
 2. On the target machine, copy it from the stick to a local SSD. Do not run models straight off a slow stick.
 3. Run `VERIFY.cmd` and wait for confirmation. It checks SHA-256 of models and binaries, plus the file counts of the Node and Pi trees — thousands of small files, and the part a USB copy is most likely to truncate.
 4. Run `INSTALL-PATH.cmd` once.
