@@ -492,11 +492,13 @@ Write-Host "  Backend   : $backendKey  -  $budgetLabel"
 Write-Host "  Context   : $($contextSize / 1024)K   (KV $cacheType, $(Format-MiB $contextEntry.KvMiB))"
 Write-Host "  MTP       : $(if ($useMtp) { 'enabled' } else { 'disabled' })"
 Write-Host "  API       : $apiBase"
+Write-Host "  Chat UI   : $apiRoot  (built into llama.cpp, always available)"
 Write-Host '  The server stays in its own window. Leave it open.' -ForegroundColor DarkGray
 
 if ($chosen) {
   Write-Host ''
-  Write-Host "  OPEN ANY FOLDER AND PASTE THIS:" -ForegroundColor Cyan
+  $heading = if ($chosen.OpenUrl) { '  YOUR CHAT UI:' } else { '  OPEN ANY FOLDER AND PASTE THIS:' }
+  Write-Host $heading -ForegroundColor Cyan
   Write-Host ''
   Write-Host "    $($chosen.Line)" -ForegroundColor Yellow
   Write-Host ''
@@ -505,6 +507,11 @@ if ($chosen) {
     Write-Host '    (already in your clipboard)' -ForegroundColor DarkGray
   } catch {}
   if ($chosen.Note) { Write-Host "    $($chosen.Note)" -ForegroundColor DarkGray }
+  if ($chosen.OpenUrl) {
+    Start-Process $chosen.OpenUrl | Out-Null
+    Write-Host ''
+    Write-Host '    Opening it now...' -ForegroundColor DarkGray
+  }
 }
 
 Write-Host ''

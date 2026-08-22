@@ -199,6 +199,18 @@ function Get-Harnesses {
       }
     },
     [pscustomobject]@{
+      # llama-server serves its own chat UI at the root URL, compiled into the
+      # binary. Nothing to install, and it is already running: the only thing
+      # missing was telling anyone it exists.
+      Name = 'Browser'; Api = 'built-in chat UI'; Supported = $true; SupportNote = ''
+      Installed = $true
+      Line = $ApiRoot
+      OpenUrl = $ApiRoot
+      Note = 'Opens in your default browser. Supports images when the model has vision.'
+      Configure = $null
+      IsConfigured = { param($ServerConfig) return $true }
+    },
+    [pscustomobject]@{
       Name = 'Codex'; Api = 'OpenAI responses'; Supported = $true; SupportNote = ''
       Installed = [bool](Get-Command codex -ErrorAction SilentlyContinue)
       Line = "codex --profile $CodexProfile"

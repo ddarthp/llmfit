@@ -2,7 +2,7 @@
 
 **Portable, hardware-aware local LLM server for coding agents.**
 
-`llmfit` measures what your machine can actually hold, lets you pick a model, vision and context that fit, starts `llama.cpp`, and hands you the command line to point Pi, OpenCode or Codex at it — in whatever folder you want to work in.
+`llmfit` measures what your machine can actually hold, lets you pick a model, vision and context that fit, and starts `llama.cpp`. Then it either opens a chat window or hands you the command line to point Pi, OpenCode or Codex at the server — in whatever folder you want to work in.
 
 No install step, no build, no Git needed on the target machine. Copy the folder, run one command.
 
@@ -21,6 +21,7 @@ No install step, no build, no Git needed on the target machine. Copy the folder,
 - [What is *not* in this repository](#what-is-not-in-this-repository)
 - [Models](#models)
 - [Configuration](#configuration)
+- [Just chatting](#just-chatting)
 - [Using it from your editor](#using-it-from-your-editor)
 - [Reference measurements](#reference-measurements)
 - [Moving the package to another machine](#moving-the-package-to-another-machine)
@@ -175,11 +176,12 @@ When it is off, `--spec-type none` is passed explicitly. A state shown on screen
 ```
 1) Pi          [installed]      OpenAI chat
 2) OpenCode    [installed]      OpenAI chat
-3) Codex       [installed]      OpenAI responses
-4) None, server only
+3) Browser     [installed]      built-in chat UI
+4) Codex       [installed]      OpenAI responses
+5) None, server only
 ```
 
-All three harnesses are supported. The bracket reports what was detected on *your* machine:
+**Browser** needs nothing installed and is always available — see [just chatting](#just-chatting). For the rest, the bracket reports what was detected on *your* machine:
 
 | Tag | Meaning |
 | --- | --- |
@@ -298,6 +300,22 @@ Everything tunable lives in `config/`. No values are hardcoded in the scripts.
 The `harness` section defines the name each tool uses for the local provider. Match it to what you already have — registering a second name creates a duplicate provider pointing at the same server.
 
 Each model may carry its own `overhead` block with measured `baseMiB` and `visionMiB` values. When it does, those win over the defaults in `config/server.json`. A new model works without one; it just inherits constants measured on something else, so measure it if the numbers matter to you.
+
+---
+
+## Just chatting
+
+If you only want to talk to the model, pick **Browser** and `llmfit` opens it for you. `llama.cpp` compiles a chat UI into the server itself, so it is already running at:
+
+```
+http://127.0.0.1:8080
+```
+
+No install, no Docker, no extra process. It handles conversations, system prompts, sampling settings, and file attachments — with a vision model loaded the server advertises image, video and audio input, and the UI exposes them. It ships a web manifest too, so your browser can install it as a standalone app.
+
+That URL is printed at the end of every run whatever harness you chose, because the UI is up regardless.
+
+Want chat history synced across devices, document search or multiple users? Point **Open WebUI** or any other OpenAI-compatible front end at `http://127.0.0.1:8080/v1` with any value as the API key. `llmfit` does not bundle one: they need Docker or a Python environment, which is exactly the install step this project exists to avoid.
 
 ---
 
