@@ -21,7 +21,7 @@ No install step, no build, no Git needed on the target machine. Copy the folder,
 - [What is *not* in this repository](#what-is-not-in-this-repository)
 - [Models](#models)
 - [Configuration](#configuration)
-- [Living alongside your cloud providers](#living-alongside-your-cloud-providers)
+- [Using it from your editor](#using-it-from-your-editor)
 - [Reference measurements](#reference-measurements)
 - [Moving the package to another machine](#moving-the-package-to-another-machine)
 - [Troubleshooting](#troubleshooting)
@@ -55,14 +55,14 @@ The result is a fit table you can trust *before* you wait three minutes for a 13
 | Disk | 4.2 GB for the smallest model without vision, ~51 GB for the whole catalog |
 | Network | Only on first run, to download the model and the backend |
 
-Nothing else. Node.js and Pi are optional and only needed if you want the bundled portable copies.
+Nothing else. The harnesses (Pi, OpenCode, Codex) are optional: without one, `llmfit` still runs the server and you point anything OpenAI-compatible at it.
 
 ---
 
 ## Quick start
 
 ```powershell
-git clone https://github.com/<you>/llmfit.git
+git clone https://github.com/ddarthp/llmfit.git
 cd llmfit
 .\START.cmd
 ```
@@ -80,11 +80,11 @@ Enter accepts the highlighted option in each step.
 ### 1. Architecture
 
 ```
-1) NVIDIA CUDA 13.3                                        [recommended]
-     CUDA0    <discrete GPU>              15.9 GiB total,  15.6 GiB usable
+1) NVIDIA CUDA 13.3                                     [recommended]
+     CUDA0    NVIDIA GeForce RTX 5070 Ti   15.9 GiB total,  15.6 GiB usable
 2) Vulkan
-     Vulkan0  <integrated GPU / APU>      47.6 GiB total,  47.3 GiB usable
-     Vulkan1  <discrete GPU>              15.6 GiB total,  15.3 GiB usable
+     Vulkan0  AMD Radeon 780M Graphics     47.6 GiB total,  47.3 GiB usable
+     Vulkan1  NVIDIA GeForce RTX 5070 Ti   15.6 GiB total,  15.3 GiB usable
 3) CPU x64
      no GPU: uses system RAM
 ```
@@ -110,7 +110,7 @@ Every model in the catalog, each with vision on and off:
 10) Gemma 4 26B-A4B QAT (MoE)    no vision    will be downloaded  MTP available
 ```
 
-Turning vision off skips the `mmproj` file and saves roughly a gigabyte of weights plus another 448 MiB of encoder compute buffers.
+Turning vision off skips the `mmproj` file. That saves its weight — between 175 MB and 1.2 GB depending on the model — plus the encoder's compute buffers, which are measured per model and listed under [reference measurements](#reference-measurements).
 
 ### 3. Context
 
@@ -179,7 +179,7 @@ When it is off, `--spec-type none` is passed explicitly. A state shown on screen
 4) None, server only
 ```
 
-All three are supported. The bracket reports what was detected on *your* machine:
+All three harnesses are supported. The bracket reports what was detected on *your* machine:
 
 | Tag | Meaning |
 | --- | --- |
@@ -239,33 +239,7 @@ Get-Process llama-server | Stop-Process -Force
 
 ## What is in this repository
 
-Everything here is plain text — about 85 KB in total.
-
-```
-llmfit.ps1              The launcher: detection, fit calculation, five-step flow
-serve.ps1               Invokes llama-server with explicit flags
-verify.ps1              SHA-256 and file-count integrity check
-clean.ps1               Reclaims disk by deleting extracted archives
-install-path.ps1        Adds the tool to the user PATH
-
-lib/
-  harness.ps1           Harness definitions and how to register the local
-                        provider in Pi, OpenCode and Codex
-
-config/
-  models.json           Model catalog: alias, HuggingFace URL, SHA-256, and the
-                        geometry read from the GGUF header
-  backends.json         llama.cpp backends: release URL, SHA-256, file counts
-  server.json           Host, port, KV type, driver reserve, calibrated
-                        overheads, context options, harness provider names
-  runtimes.json         Node and Pi: path, entrypoint, file counts
-
-bin/llmfit.cmd          Shim that puts `llmfit` on your PATH
-START.cmd               Launcher wrapper
-INSTALL-PATH.cmd        PATH setup wrapper
-VERIFY.cmd              Verification wrapper
-CLEAN.cmd               Cleanup wrapper
-```
+Plain text, about 85 KB: five PowerShell scripts, the harness definitions in `lib/`, four JSON files in `config/`, and the `.cmd` wrappers that make them double-clickable. Nothing is generated and nothing is vendored.
 
 ## What is *not* in this repository
 
@@ -291,13 +265,15 @@ Model weights belong to their respective publishers under their own licenses.
 
 ## Models
 
-| Model | Catalog key | Weights | Vision | KV at 128K | Max context | MTP |
+| Model | Model name to use | Weights | Vision | KV at 128K | Max context | MTP |
 | --- | --- | --- | --- | --- | --- | --- |
-| Gemma 4 E4B QAT | `gemma4-e4b` | 4.22 GB | 990 MB | 0.64 GiB | 128K | draft model |
-| Gemma 4 12B QAT | `gemma4-12b` | 6.72 GB | 175 MB | 0.72 GiB | 256K | draft model |
-| Qwen 3.5 9B Q6_K | `qwen35-9b` | 7.46 GB | 876 MB | 1.25 GiB | 256K | — |
-| Qwen 3.8 27B UD-Q3_K_XL | `qwen38-27b` | 13.15 GB | 885 MB | 2.50 GiB | 256K | embedded |
-| Gemma 4 26B-A4B QAT | `gemma4-26b-a4b` | 14.25 GB | 1.19 GB | 0.84 GiB | 256K | draft model |
+| Gemma 4 E4B QAT | `gemma4-e4b-qat` | 4.22 GB | 990 MB | 0.64 GiB | 128K | draft model |
+| Gemma 4 12B QAT | `gemma4-12b-qat` | 6.72 GB | 175 MB | 0.72 GiB | 256K | draft model |
+| Qwen 3.5 9B Q6_K | `qwen3.5-9b-q6` | 7.46 GB | 876 MB | 1.25 GiB | 256K | — |
+| Qwen 3.8 27B UD-Q3_K_XL | `qwen3.8-27b-q3` | 13.15 GB | 885 MB | 2.50 GiB | 256K | embedded |
+| Gemma 4 26B-A4B QAT | `gemma4-26b-a4b-qat` | 14.25 GB | 1.19 GB | 0.84 GiB | 256K | draft model |
+
+The middle column is the name your harness needs — see [using it from your editor](#using-it-from-your-editor). `config/models.json` keys them slightly differently (`gemma4-e4b` rather than `gemma4-e4b-qat`); the key is only for `serve.ps1 -ModelKey`.
 
 All of them are Unsloth quantizations with an optional vision encoder. KV figures are at the default `q4_1`. The whole catalog, weights plus encoders plus draft models, is about 51 GB on disk — you only ever download what you pick.
 
@@ -319,31 +295,49 @@ Everything tunable lives in `config/`. No values are hardcoded in the scripts.
 | `config/server.json` | Host, port, KV type, driver reserve, overheads, context options, provider names |
 | `config/runtimes.json` | Node and Pi: path, entrypoint, file counts |
 
-To add your own model, add an entry to `config/models.json` with its URL, SHA-256 and the geometry from its GGUF header (`block_count`, `attention.head_count_kv`, `attention.key_length`, `attention.value_length`, and `full_attention_interval` if the architecture is hybrid).
-
 The `harness` section defines the name each tool uses for the local provider. Match it to what you already have — registering a second name creates a duplicate provider pointing at the same server.
 
 Each model may carry its own `overhead` block with measured `baseMiB` and `visionMiB` values. When it does, those win over the defaults in `config/server.json`. A new model works without one; it just inherits constants measured on something else, so measure it if the numbers matter to you.
 
 ---
 
-## Living alongside your cloud providers
+## Using it from your editor
 
-`llmfit` **registers** the local provider and nothing else. It never changes your default model, because that would leave every other project pointing at a local server that is usually switched off.
+When `llmfit` finishes it prints the command and copies it to your clipboard, so normally you just paste. This is the reference for writing it yourself.
 
-| Harness | Local | Your usual setup |
+| Harness | Point it at the local server | Keep using your cloud provider |
 | --- | --- | --- |
-| Pi | `pi --provider llama-cpp --model qwen3.5-9b-q6` | `pi` |
-| OpenCode | `opencode -m llamacpp/qwen3.5-9b-q6` | `opencode` |
-| Codex | `codex --profile llama-local` | `codex` |
+| **Pi** | `pi --provider llama-cpp --model MODEL` | `pi` |
+| **OpenCode** | `opencode -m llamacpp/MODEL` | `opencode` |
+| **Codex** | `codex --profile llama-local` | `codex` |
 
-To switch between cloud and local without leaving a session:
+`MODEL` is the *model name to use* column of the [models table](#models). Worked examples, for the Gemma 4 12B:
 
+```powershell
+pi --provider llama-cpp --model gemma4-12b-qat
+opencode -m llamacpp/gemma4-12b-qat
+codex --profile llama-local
 ```
-pi --models "<your-provider>/*,llama-cpp/*"    # Ctrl+P cycles models
+
+Codex takes no model name: `llmfit` writes the model into the `llama-local` profile every time you pick one, so the profile always matches whatever is loaded.
+
+Three things worth knowing:
+
+- **The name has to match what the server loaded.** One model is served at a time; asking for a different one will not switch it. Re-run `llmfit` to load another.
+- **Run it in any folder.** The harness talks to `http://127.0.0.1:8080`, so start it wherever your code lives.
+- **The server outlives your session.** Close the harness and open it again without paying the load time twice.
+
+### It leaves your defaults alone
+
+`llmfit` **registers** the local provider in that tool's configuration and nothing more. It never changes your default model, because that would leave every other project pointing at a local server that is usually switched off. Run `pi` or `opencode` with no flags and you are on your usual provider.
+
+To switch between cloud and local without leaving a session, load both catalogs at once and cycle with **Ctrl+P**:
+
+```powershell
+pi --models "anthropic/*,llama-cpp/*"
 ```
 
-In OpenCode, the TUI model picker switches live.
+Replace `anthropic` with whichever provider you already use in Pi. In OpenCode the TUI model picker switches live, no flag needed.
 
 Every file `llmfit` touches is backed up next to the original as `.llmfit-backup` before the first write.
 
@@ -353,9 +347,7 @@ Every file `llmfit` touches is backed up next to the original as `.llmfit-backup
 
 ## Reference measurements
 
-A 16 GB NVIDIA card, measured with `nvidia-smi`:
-
-Every model in the catalog has been measured against `nvidia-smi` on a 16 GB NVIDIA card. A sample:
+Every model in the catalog has been measured against `nvidia-smi` on a 16 GB NVIDIA card (an RTX 5070 Ti). A sample:
 
 | Configuration | Estimated | VRAM used | Generation |
 | --- | --- | --- | --- |
@@ -401,7 +393,7 @@ powershell -ExecutionPolicy Bypass -File verify.ps1 -Full   # require the whole 
 
 1. Copy the whole folder to the stick. A full catalog runs to about 52 GB with the backends, so size the stick for what you actually keep, and format it **exFAT or NTFS** — FAT32 cannot hold files over 4 GB and every GGUF here is larger.
 2. On the target machine, copy it from the stick to a local SSD. Do not run models straight off a slow stick.
-3. Run `VERIFY.cmd` and wait for confirmation. It checks SHA-256 of models and binaries, plus the file counts of the Node and Pi trees — thousands of small files, and the part a USB copy is most likely to truncate.
+3. Run `VERIFY.cmd` and wait for confirmation. It re-checks the SHA-256 of every model and binary, which is what catches a copy that was silently truncated.
 4. Run `INSTALL-PATH.cmd` once.
 5. Open a new terminal and run `llmfit`.
 
