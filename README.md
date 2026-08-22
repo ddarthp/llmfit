@@ -427,6 +427,18 @@ powershell -ExecutionPolicy Bypass -File verify.ps1 -Full   # require the whole 
 
 **"A local llama-server is already running."** Answer `Y` to replace it, or `n` to keep using the one already up.
 
+**Pi will not start: `npm error ... install failed`.** Pi *installs* every package listed under `packages` in `~/.pi/agent/settings.json` each time it launches, and one that fails to build stops it from opening at all. `llmfit` never adds packages — `piPackages` is empty on purpose — but it will not silently delete ones you put there either. To make it drop a specific package the next time you pick Pi, name it under `piPackagesRetired` in `config/server.json`:
+
+```json
+"piPackagesRetired": ["npm:the-broken-package"]
+```
+
+Or edit `settings.json` yourself. To check whether Pi is healthy without opening the TUI:
+
+```powershell
+pi --provider llama-cpp --model qwen3.5-9b-q6 -p "say OK"
+```
+
 **Restore my previous configuration.** Every file the launcher touched has a `.llmfit-backup` copy next to it.
 
 **Stop the server.**
