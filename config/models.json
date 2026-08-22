@@ -1,5 +1,6 @@
 {
-  "stable9b": {
+  "_comment": "KV cache is modelled as two terms: kvElementsPerToken * context + kvElementsFixed. That single formula covers both architectures here. Qwen 3.5/3.8 are hybrid attention/SSM: only 1 layer in 4 holds a KV cache and the SSM layers have fixed-size state, so the fixed term is 0 and folded into overhead. Gemma 4 uses sliding-window attention: the few full-attention layers scale with context, while the sliding-window layers are capped at the window and never grow. Every number below is derived from the GGUF header; the detail block records where it came from.",
+  "qwen35-9b": {
     "name": "Qwen 3.5 9B Q6_K",
     "alias": "qwen3.5-9b-q6",
     "maxTokens": 8192,
@@ -9,22 +10,27 @@
     "mmprojFile": "Qwen3.5-9B-mmproj-F16.gguf",
     "mmprojUrl": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/mmproj-F16.gguf?download=true",
     "mmprojSha256": "f70dc3509053962b0d0d3ee8a7eacebf5d60aa560cad78254ae8698516ae029f",
+    "imageMinTokens": 1024,
     "geometry": {
-      "_comment": "Read from the GGUF header (qwen35.*). HYBRID attention/SSM architecture: full_attention_interval=4 means only 1 layer in 4 holds a KV cache; the rest are SSM layers with fixed-size state. Counting all 32 blocks overestimates KV by 4x.",
-      "blockCount": 32,
-      "nextnLayers": 0,
-      "fullAttentionInterval": 4,
-      "attentionLayers": 8,
-      "headCountKv": 4,
-      "keyLength": 256,
-      "valueLength": 256,
+      "kvElementsPerToken": 16384,
+      "kvElementsFixed": 0,
       "maxContext": 262144,
-      "hasMtp": false
+      "detail": {
+        "architecture": "qwen35",
+        "blockCount": 32,
+        "fullAttentionInterval": 4,
+        "attentionLayers": 8,
+        "headCountKv": 4,
+        "keyLength": 256,
+        "valueLength": 256,
+        "derivation": "8 attention layers x 4 kv heads x (256+256) = 16384 per token. The other 24 layers are SSM with fixed-size state."
+      },
+      "summary": "hybrid attention/SSM: 8 of 32 layers hold a KV cache"
     },
-    "note": "Stable. No MTP: the GGUF does not carry nextn_predict_layers."
+    "note": "Stable. No MTP: the GGUF carries no nextn_predict_layers."
   },
-  "experimental27b": {
-    "name": "Qwen 3.8 27B UD-Q3_K_XL (unsloth)",
+  "qwen38-27b": {
+    "name": "Qwen 3.8 27B UD-Q3_K_XL",
     "alias": "qwen3.8-27b-q3",
     "maxTokens": 8192,
     "modelFile": "Qwen3.8-27B-UD-Q3_K_XL.gguf",
@@ -33,18 +39,150 @@
     "mmprojFile": "Qwen3.8-27B-mmproj-F16.gguf",
     "mmprojUrl": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/mmproj-F16.gguf?download=true",
     "mmprojSha256": "cbb841a9ee0636b2ec172f5bb8df2ea8dfeb01e90fe7c6126581d662a0b4e43e",
-    "geometry": {
-      "_comment": "65 blocks = 64 real layers + 1 nextn (MTP) layer. With full_attention_interval=4 that leaves 16 layers holding a KV cache. Measured on a 16 GB GPU: with vision at 64K it uses 15.2 GB.",
-      "blockCount": 65,
-      "nextnLayers": 1,
-      "fullAttentionInterval": 4,
-      "attentionLayers": 16,
-      "headCountKv": 4,
-      "keyLength": 256,
-      "valueLength": 256,
-      "maxContext": 262144,
-      "hasMtp": true
+    "imageMinTokens": 1024,
+    "mtp": {
+      "mode": "embedded"
     },
-    "note": "Unsloth Q3. Ships MTP: enabled automatically on CUDA when VRAM allows."
+    "geometry": {
+      "kvElementsPerToken": 32768,
+      "kvElementsFixed": 0,
+      "maxContext": 262144,
+      "detail": {
+        "architecture": "qwen35",
+        "blockCount": 65,
+        "nextnLayers": 1,
+        "fullAttentionInterval": 4,
+        "attentionLayers": 16,
+        "headCountKv": 4,
+        "keyLength": 256,
+        "valueLength": 256,
+        "derivation": "65 blocks = 64 real layers + 1 nextn (MTP). 64/4 = 16 attention layers x 4 kv heads x (256+256) = 32768 per token. Measured on a 16 GB GPU: with vision at 64K it uses 15.2 GB."
+      },
+      "summary": "hybrid attention/SSM: 16 of 65 layers hold a KV cache"
+    },
+    "note": "Unsloth Q3. MTP layers are embedded in the model file."
+  },
+  "gemma4-e4b": {
+    "name": "Gemma 4 E4B QAT",
+    "alias": "gemma4-e4b-qat",
+    "maxTokens": 8192,
+    "modelFile": "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
+    "modelUrl": "https://huggingface.co/unsloth/gemma-4-E4B-it-qat-GGUF/resolve/main/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf?download=true",
+    "modelSha256": "df0fd4ee07072c607c29a0a1cb4f98918426cca12f45a2776bdd6ee6d09a4de3",
+    "mmprojFile": "gemma-4-E4B-mmproj-F16.gguf",
+    "mmprojUrl": "https://huggingface.co/unsloth/gemma-4-E4B-it-qat-GGUF/resolve/main/mmproj-F16.gguf?download=true",
+    "mmprojSha256": "6a255159ee4b01b304f633a57f017dd7d5a69d30fff52abb2614bf0813cef034",
+    "mtp": {
+      "mode": "draft-model",
+      "file": "mtp-gemma-4-E4B-it.gguf",
+      "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-qat-GGUF/resolve/main/mtp-gemma-4-E4B-it.gguf?download=true",
+      "sha256": "423074e537504b4f9ec5eafed5c639fac82c96631626efccacdd3c4039b20605",
+      "bytes": 59678016
+    },
+    "geometry": {
+      "kvElementsPerToken": 14336,
+      "kvElementsFixed": 18350080,
+      "maxContext": 131072,
+      "detail": {
+        "architecture": "gemma4",
+        "blockCount": 42,
+        "slidingWindow": 512,
+        "slidingWindowPattern": "5 sliding-window layers per 1 full-attention layer",
+        "fullAttentionLayers": 7,
+        "slidingWindowLayers": 35,
+        "headCountKv": 2,
+        "keyLength": 512,
+        "valueLength": 512,
+        "keyLengthSwa": 256,
+        "valueLengthSwa": 256,
+        "sharedKvLayers": 18,
+        "derivation": "Scaling term: 7 full layers x 2 kv heads x (512+512) = 14336 per token. Fixed term: 35 sliding layers x 2 kv heads x (256+256) x 512 window = 18350080. shared_kv_layers=18 means 18 layers reuse another layer's cache, which is NOT subtracted here: the estimate is deliberately conservative because the header does not say which layers share.",
+        "measured": "Measured on a 16 GB NVIDIA GPU: with vision, 128K context and the MTP draft model it uses 4676 MiB, against an estimate of 6758 MiB. The estimate is deliberately conservative for this model: shared_kv_layers=18 is not subtracted, and the overhead constants were calibrated on Qwen's vision encoder, which is heavier than Gemma's. Erring high never reports FITS for something that does not fit, but TOO BIG may be pessimistic here."
+      },
+      "summary": "sliding-window attention: 7 of 42 layers scale with context, 35 capped at a 512-token window"
+    },
+    "note": "Smallest of the family and caps at 128K, unlike its siblings. Verified end to end: 89 tok/s with vision and speculative decoding."
+  },
+  "gemma4-12b": {
+    "name": "Gemma 4 12B QAT",
+    "alias": "gemma4-12b-qat",
+    "maxTokens": 8192,
+    "modelFile": "gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+    "modelUrl": "https://huggingface.co/unsloth/gemma-4-12B-it-qat-GGUF/resolve/main/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf?download=true",
+    "modelSha256": "90fd44e29e0d7cffeb0fd00dc73cfdab9ed0b0e95306ecf7821ea634c940c370",
+    "mmprojFile": "gemma-4-12B-mmproj-F16.gguf",
+    "mmprojUrl": "https://huggingface.co/unsloth/gemma-4-12B-it-qat-GGUF/resolve/main/mmproj-F16.gguf?download=true",
+    "mmprojSha256": "ecc4e93128da8363b7dbf2193eab98cf1142353f52ceaa0c95c0872997aaadd3",
+    "mtp": {
+      "mode": "draft-model",
+      "file": "mtp-gemma-4-12B-it.gguf",
+      "url": "https://huggingface.co/unsloth/gemma-4-12B-it-qat-GGUF/resolve/main/mtp-gemma-4-12B-it.gguf?download=true",
+      "sha256": "fcb35dea42c71333db904cee11baac525c9ef872818ee3753f6cb156f3c6f4f6",
+      "bytes": 253708800
+    },
+    "geometry": {
+      "kvElementsPerToken": 8192,
+      "kvElementsFixed": 167772160,
+      "maxContext": 262144,
+      "detail": {
+        "architecture": "gemma4",
+        "blockCount": 48,
+        "slidingWindow": 1024,
+        "slidingWindowPattern": "5 sliding-window layers per 1 full-attention layer",
+        "fullAttentionLayers": 8,
+        "slidingWindowLayers": 40,
+        "headCountKvFull": 1,
+        "headCountKvSwa": 8,
+        "keyLength": 512,
+        "valueLength": 512,
+        "keyLengthSwa": 256,
+        "valueLengthSwa": 256,
+        "derivation": "Scaling term: 8 full layers x 1 kv head x (512+512) = 8192 per token. Fixed term: 40 sliding layers x 8 kv heads x (256+256) x 1024 window = 167772160. The context-scaling layers deliberately use a single kv head, which is why 256K stays cheap."
+      },
+      "summary": "sliding-window attention: 8 of 48 layers scale with context, 40 capped at a 1024-token window"
+    },
+    "note": "The dense flagship of the family. Very cheap KV cache for its size."
+  },
+  "gemma4-26b-a4b": {
+    "name": "Gemma 4 26B-A4B QAT (MoE)",
+    "alias": "gemma4-26b-a4b-qat",
+    "maxTokens": 8192,
+    "modelFile": "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf",
+    "modelUrl": "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-qat-GGUF/resolve/main/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf?download=true",
+    "modelSha256": "a7c5bc715f5ff8e99a3e8901ce7d2b42b402c669bf24f7c5250747633d0f5891",
+    "mmprojFile": "gemma-4-26B-A4B-mmproj-F16.gguf",
+    "mmprojUrl": "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-qat-GGUF/resolve/main/mmproj-F16.gguf?download=true",
+    "mmprojSha256": "d00f211a7d4f7fb19bd9b75d8e9342eccffb5920b08fd9562167560fdfcc5dd1",
+    "mtp": {
+      "mode": "draft-model",
+      "file": "mtp-gemma-4-26B-A4B-it.gguf",
+      "url": "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-qat-GGUF/resolve/main/mtp-gemma-4-26B-A4B-it.gguf?download=true",
+      "sha256": "7272d97595f0d4c74bd7b623492b7dbdaafd8b7c72f329a8270ba4eca68f768a",
+      "bytes": 251939328
+    },
+    "geometry": {
+      "kvElementsPerToken": 10240,
+      "kvElementsFixed": 104857600,
+      "maxContext": 262144,
+      "detail": {
+        "architecture": "gemma4",
+        "blockCount": 30,
+        "expertCount": 128,
+        "expertUsedCount": 8,
+        "slidingWindow": 1024,
+        "slidingWindowPattern": "5 sliding-window layers per 1 full-attention layer",
+        "fullAttentionLayers": 5,
+        "slidingWindowLayers": 25,
+        "headCountKvFull": 2,
+        "headCountKvSwa": 8,
+        "keyLength": 512,
+        "valueLength": 512,
+        "keyLengthSwa": 256,
+        "valueLengthSwa": 256,
+        "derivation": "Scaling term: 5 full layers x 2 kv heads x (512+512) = 10240 per token. Fixed term: 25 sliding layers x 8 kv heads x (256+256) x 1024 window = 104857600. Mixture of experts: 8 of 128 experts run per token, but ALL of them must be resident, so the weights cost is the full 14.25 GB."
+      },
+      "summary": "sliding-window attention: 5 of 30 layers scale with context, 25 capped at a 1024-token window"
+    },
+    "note": "Mixture of experts: 4B active parameters, but all 128 experts occupy memory."
   }
 }

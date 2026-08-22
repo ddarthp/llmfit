@@ -6,10 +6,16 @@
 # a local server that is usually switched off. The model is chosen per
 # invocation, with a flag.
 
+# Keys starting with '_' are documentation inside the catalog, not models.
+function Get-CatalogKeys {
+  param([System.Collections.IDictionary]$Catalog)
+  return @($Catalog.Keys | Where-Object { -not $_.StartsWith('_') })
+}
+
 function Get-ProviderModelList {
   param([System.Collections.IDictionary]$Catalog)
   $models = @()
-  foreach ($key in $Catalog.Keys) {
+  foreach ($key in (Get-CatalogKeys -Catalog $Catalog)) {
     $item = $Catalog[$key]
     $models += [ordered]@{
       id = $item.alias
@@ -68,7 +74,7 @@ function Configure-Pi {
   }
 
   # Undo the global override that earlier versions used to apply.
-  $aliases = @($Catalog.Keys | ForEach-Object { $Catalog[$_].alias })
+  $aliases = @((Get-CatalogKeys -Catalog $Catalog) | ForEach-Object { $Catalog[$_].alias })
   if ($settings.Contains('defaultProvider') -and $settings.defaultProvider -eq $providerKey) { $settings.Remove('defaultProvider') }
   if ($settings.Contains('defaultModel') -and $aliases -contains $settings.defaultModel) { $settings.Remove('defaultModel') }
   Write-Utf8NoBom -Path $settingsPath -Content ($settings | ConvertTo-Json -Depth 12)
@@ -87,7 +93,7 @@ function Configure-OpenCode {
   if (-not $config.Contains('provider')) { $config.provider = [ordered]@{} }
 
   $models = [ordered]@{}
-  foreach ($key in $Catalog.Keys) {
+  foreach ($key in (Get-CatalogKeys -Catalog $Catalog)) {
     $item = $Catalog[$key]
     # tool_call and attachment are mandatory: without them OpenCode does not
     # hand tools to the model and does not allow image attachments, leaving it
@@ -139,7 +145,7 @@ function Configure-Codex {
   $orphan = Join-Path $directory 'llama-local.config.toml'
   if (Test-Path -LiteralPath $orphan) { Remove-Item -LiteralPath $orphan -Force }
 
-  $first = $Catalog[@($Catalog.Keys)[0]]
+  $first = $Catalog[(Get-CatalogKeys -Catalog $Catalog)[0]]
   $content = @"
 [model_providers.llama-cpp]
 name = "llama.cpp local"

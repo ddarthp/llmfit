@@ -54,6 +54,7 @@ Write-Host ''
 
 Write-Host '--- Models ---' -ForegroundColor Cyan
 foreach ($property in $models.PSObject.Properties) {
+  if ($property.Name.StartsWith('_')) { continue }
   $model = $property.Value
   $files = @(
     @{ Path = Join-Path (Join-Path $root 'models') $model.modelFile; Sha256 = $model.modelSha256; Label = $model.modelFile },

@@ -168,11 +168,13 @@ function Format-MiB {
 
 function Get-KvMiB {
   param([hashtable]$Geometry, [int]$Context, [double]$BytesPerElement)
-  # Qwen 3.5/3.8 are HYBRID attention/SSM models: with full_attention_interval=4
-  # only one layer in four keeps a KV cache; the rest are SSM layers with
-  # fixed-size state. Counting every layer overestimates KV by 4x, which is what
-  # made configurations that fit comfortably report "TOO BIG".
-  $elements = [double]$Geometry.attentionLayers * $Geometry.headCountKv * ($Geometry.keyLength + $Geometry.valueLength) * $Context
+  # Two terms, because not every layer's cache grows with context:
+  #   - kvElementsPerToken scales with the context length
+  #   - kvElementsFixed does not (sliding-window layers capped at their window)
+  # Both coefficients are derived from the GGUF header and stored in the
+  # catalog, so this stays architecture-agnostic. Assuming every layer scales
+  # is what makes configurations that fit comfortably look impossible.
+  $elements = [double]$Geometry.kvElementsPerToken * $Context + [double]$Geometry.kvElementsFixed
   return ($elements * $BytesPerElement) / 1MB
 }
 
@@ -190,7 +192,8 @@ $serverConfig = Read-JsonConfig 'server.json'
 
 $apiRoot = "http://$($serverConfig.host):$($serverConfig.port)"
 $apiBase = "$apiRoot/v1"
-$modelKeys = @($catalog.Keys)
+# Keys starting with '_' are documentation inside the catalog, not models.
+$modelKeys = @($catalog.Keys | Where-Object { -not $_.StartsWith('_') })
 $backendKeys = @($backends.Keys)
 $piProvider = $serverConfig.harness.piProvider
 $openCodeProvider = $serverConfig.harness.openCodeProvider
@@ -250,7 +253,7 @@ for ($i = 0; $i -lt $options.Count; $i++) {
   $option = $options[$i]
   $mark = if (($i + 1) -eq $recommended) { ' [recommended]' } else { '' }
   $state = if ($option.Installed) { '' } else { ' [will be downloaded]' }
-  Write-Host "  $($i + 1)) $($option.Backend.name)$mark$state"
+  Write-Host ("  {0,2}) {1}{2}{3}" -f ($i + 1), $option.Backend.name, $mark, $state)
   if ($option.Devices.Count) {
     foreach ($device in $option.Devices) {
       Write-Host ("       {0,-8} {1,-28} {2,10} total, {3,10} usable" -f $device.Id, $device.Name, (Format-MiB $device.TotalMiB), (Format-MiB ($device.TotalMiB - $deviceReserveMiB))) -ForegroundColor DarkGray
@@ -298,12 +301,12 @@ foreach ($key in $modelKeys) {
 for ($i = 0; $i -lt $variants.Count; $i++) {
   $variant = $variants[$i]
   $visionText = if ($variant.Vision) { 'with vision' } else { 'no vision' }
-  $mtpText = if ($variant.Model.geometry.hasMtp) { '  MTP available' } else { '' }
+  $mtpText = if ($variant.Model.mtp) { '  MTP available' } else { '' }
   $sizeText = if ($variant.WeightsMiB) {
     if ($variant.Vision) { "weights $(Format-MiB $variant.WeightsMiB) + vision $(Format-MiB $variant.VisionMiB)" }
     else { "weights $(Format-MiB $variant.WeightsMiB)" }
   } else { 'will be downloaded' }
-  Write-Host ("  {0}) {1,-26} {2,-11}" -f ($i + 1), $variant.Model.name, $visionText) -NoNewline
+  Write-Host ("  {0,2}) {1,-28} {2,-11}" -f ($i + 1), $variant.Model.name, $visionText) -NoNewline
   Write-Host "  $sizeText$mtpText" -ForegroundColor DarkGray
 }
 
@@ -327,7 +330,7 @@ $cacheType = $serverConfig.cacheType
 $cacheBytes = [double]$serverConfig.cacheTypeBytes[$cacheType]
 if (-not $cacheBytes) { throw "Unknown KV cache type in config/server.json: $cacheType" }
 Write-Host "  KV quantized to $cacheType ($cacheBytes bytes per element)." -ForegroundColor DarkGray
-Write-Host "  Only $($model.geometry.attentionLayers) of $($model.geometry.blockCount) layers hold KV: this is a hybrid attention/SSM model." -ForegroundColor DarkGray
+Write-Host "  $($model.geometry.summary)." -ForegroundColor DarkGray
 Write-Host ''
 
 # Overhead calibrated against nvidia-smi: the vision encoder adds compute
@@ -351,7 +354,7 @@ for ($i = 0; $i -lt $contexts.Count; $i++) {
   $status = if ($entry.Fits) { 'FITS' } elseif ($entry.Tight) { 'TIGHT' } else { 'TOO BIG' }
   $color = if ($entry.Fits) { 'Green' } elseif ($entry.Tight) { 'Yellow' } else { 'Red' }
   if ($entry.Fits) { $defaultContext = $i + 1 }
-  Write-Host ("  {0}) {1,5}   KV {2,10}   estimated total {3,10}   " -f ($i + 1), "$($entry.Context / 1024)K", (Format-MiB $entry.KvMiB), (Format-MiB $entry.TotalMiB)) -NoNewline
+  Write-Host ("  {0,2}) {1,5}   KV {2,10}   estimated total {3,10}   " -f ($i + 1), "$($entry.Context / 1024)K", (Format-MiB $entry.KvMiB), (Format-MiB $entry.TotalMiB)) -NoNewline
   Write-Host $status -ForegroundColor $color
 }
 
@@ -363,11 +366,14 @@ $contextSize = $contextEntry.Context
 
 # MTP only pays off on CUDA: on Vulkan the cost of maintaining the draft
 # context cancels out the gain. And only if the model ships nextn layers.
+# A separate draft model has to fit in memory too, on top of the working
+# headroom, so its size is added to what MTP costs.
 $mtpHeadroomMiB = 1024
+if ($model.mtp -and $model.mtp.bytes) { $mtpHeadroomMiB += [double]$model.mtp.bytes / 1MB }
 $useMtp = $false
 $mtpReason = ''
-if (-not $model.geometry.hasMtp) {
-  $mtpReason = "the model has no MTP layers"
+if (-not $model.mtp) {
+  $mtpReason = "this model ships no MTP layers"
 } elseif ($backendKey -notlike 'cuda*') {
   $mtpReason = "only enabled on CUDA (you picked $backendKey)"
 } elseif (($budgetMiB - $contextEntry.TotalMiB) -lt $mtpHeadroomMiB) {
@@ -383,8 +389,15 @@ if (-not $model.geometry.hasMtp) {
 }
 
 Write-Step 4 'SPECULATIVE DECODING (MTP)'
-if ($useMtp) { Write-Host "  Enabled: $mtpReason" -ForegroundColor Green }
-else { Write-Host "  Disabled: $mtpReason" -ForegroundColor DarkGray }
+if ($useMtp) {
+  Write-Host "  Enabled: $mtpReason" -ForegroundColor Green
+  if ($model.mtp.mode -eq 'draft-model') {
+    Write-Host "  Draft model: $($model.mtp.file)" -ForegroundColor DarkGray
+    Ensure-Artifact -Path (Join-Path $modelsDirectory $model.mtp.file) -Url $model.mtp.url -Sha256 $model.mtp.sha256
+  }
+} else {
+  Write-Host "  Disabled: $mtpReason" -ForegroundColor DarkGray
+}
 
 # -------------------------------------------------------------- 5. HARNESS
 
@@ -398,10 +411,10 @@ for ($i = 0; $i -lt $harnesses.Count; $i++) {
   $harness = $harnesses[$i]
   $state = if (-not $harness.Installed) { '[not installed]' } elseif (-not $harness.Supported) { '[incompatible]' } else { '[installed]' }
   $color = if ($harness.Installed -and $harness.Supported) { 'White' } else { 'DarkGray' }
-  Write-Host ("  {0}) {1,-14} {2,-16} {3}" -f ($i + 1), $harness.Name, $state, $harness.Api) -ForegroundColor $color
+  Write-Host ("  {0,2}) {1,-14} {2,-16} {3}" -f ($i + 1), $harness.Name, $state, $harness.Api) -ForegroundColor $color
   if (-not $harness.Supported) { Write-Host "       $($harness.SupportNote)" -ForegroundColor DarkGray }
 }
-Write-Host "  $($harnesses.Count + 1)) None, server only"
+Write-Host ("  {0,2}) None, server only" -f ($harnesses.Count + 1))
 
 $choice = Read-Choice -Prompt 'Harness' -Maximum ($harnesses.Count + 1) -Default 1
 $chosen = if ($choice -le $harnesses.Count) { $harnesses[$choice - 1] } else { $null }

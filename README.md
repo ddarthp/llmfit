@@ -19,6 +19,7 @@ No install step, no build, no Git needed on the target machine. Copy the folder,
 - [Command reference](#command-reference)
 - [What is in this repository](#what-is-in-this-repository)
 - [What is *not* in this repository](#what-is-not-in-this-repository)
+- [Models](#models)
 - [Configuration](#configuration)
 - [Living alongside your cloud providers](#living-alongside-your-cloud-providers)
 - [Moving the package to another machine](#moving-the-package-to-another-machine)
@@ -92,13 +93,19 @@ Enter accepts the highlighted option in each step.
 
 ### 2. Model
 
-Two models × vision on/off:
+Every model in the catalog, each with vision on and off:
 
 ```
-1) Qwen 3.5 9B Q6_K                  with vision   weights 6.9 GiB + vision 876 MiB
-2) Qwen 3.5 9B Q6_K                  no vision     weights 6.9 GiB
-3) Qwen 3.8 27B UD-Q3_K_XL           with vision   weights 12.2 GiB + vision 885 MiB   MTP available
-4) Qwen 3.8 27B UD-Q3_K_XL           no vision     weights 12.2 GiB                    MTP available
+ 1) Qwen 3.5 9B Q6_K             with vision  weights 6.9 GiB + vision 876 MiB
+ 2) Qwen 3.5 9B Q6_K             no vision    weights 6.9 GiB
+ 3) Qwen 3.8 27B UD-Q3_K_XL      with vision  weights 12.2 GiB + vision 885 MiB  MTP available
+ 4) Qwen 3.8 27B UD-Q3_K_XL      no vision    weights 12.2 GiB  MTP available
+ 5) Gemma 4 E4B QAT              with vision  will be downloaded  MTP available
+ 6) Gemma 4 E4B QAT              no vision    will be downloaded  MTP available
+ 7) Gemma 4 12B QAT              with vision  will be downloaded  MTP available
+ 8) Gemma 4 12B QAT              no vision    will be downloaded  MTP available
+ 9) Gemma 4 26B-A4B QAT (MoE)    with vision  will be downloaded  MTP available
+10) Gemma 4 26B-A4B QAT (MoE)    no vision    will be downloaded  MTP available
 ```
 
 Turning vision off skips the `mmproj` file and saves roughly a gigabyte of weights plus another 448 MiB of encoder compute buffers.
@@ -109,7 +116,7 @@ The table is computed for the model and vision setting you just chose, against t
 
 ```
 KV quantized to q4_1 (0.625 bytes per element).
-Only 16 of 65 layers hold KV: this is a hybrid attention/SSM model.
+hybrid attention/SSM: 16 of 65 layers hold a KV cache.
 
 1)   64K   KV  1.3 GiB   estimated total  15.0 GiB   TIGHT
 2)  128K   KV  2.5 GiB   estimated total  16.3 GiB   TOO BIG
@@ -118,13 +125,22 @@ Only 16 of 65 layers hold KV: this is a hybrid attention/SSM model.
 
 The same card running the 9B with vision reports `FITS` at all three lengths, topping out at 11.0 GiB for 256K.
 
-**This is the part most tools get wrong.** Qwen 3.5 and 3.8 are **hybrid attention/SSM** models. Their GGUF header carries `full_attention_interval = 4`: only one layer in four keeps a KV cache. The other three are SSM layers whose state is a fixed size that does not grow with context.
-
-So a 65-block 27B model only pays KV for **16** layers. Counting all blocks overestimates the KV cache by 4× and rules out configurations that fit comfortably.
+**This is the part most tools get wrong.** Not every layer's cache grows with context, and modern architectures lean on that hard.
 
 ```
-KV = attention_layers × kv_heads × (key_length + value_length) × context × bytes_per_element
+KV = elements_per_token × context + fixed_elements
 ```
+
+Two coefficients, read from the GGUF header and stored in the catalog. What fills them depends on the architecture:
+
+| Architecture | Scaling term | Fixed term |
+| --- | --- | --- |
+| **Hybrid attention/SSM** (Qwen 3.5, 3.8) | `full_attention_interval = 4`, so only 1 layer in 4 keeps a KV cache | The other 3 in 4 are SSM layers with fixed-size state |
+| **Sliding-window attention** (Gemma 4) | 1 layer in 6 attends to the full context | The other 5 are capped at the window (512 or 1024 tokens) and never grow |
+
+A 65-block Qwen 27B only pays KV for **16** layers. A 48-block Gemma 12B pays the scaling cost for **8** layers — and those use a single KV head each, which is why 256K stays under 1.4 GiB on it.
+
+Assuming every layer scales overestimates the cache by 4× or more and rules out configurations that fit comfortably.
 
 `FITS` leaves at least 8 % headroom, `TIGHT` fits with none, `TOO BIG` exceeds the budget. You can still pick a `TOO BIG` option — `llama.cpp` will offload layers to RAM and run much slower.
 
@@ -144,9 +160,11 @@ Set `cacheType` in `config/server.json`. Default is `q4_1`. Drop to `q4_0` to bu
 
 Decided automatically, and it tells you why:
 
-- Only if the model ships `nextn` layers. The 9B does not; the 27B does (`nextn_predict_layers = 1`).
+- Only if the model ships MTP at all. It comes in two shapes:
+  - **Embedded** — Qwen 3.8 27B carries `nextn_predict_layers = 1` inside the model file.
+  - **Separate draft model** — every Gemma 4 ships an `mtp-*.gguf` companion, downloaded on demand and passed with `--spec-draft-model`.
 - Only on CUDA. On Vulkan the cost of maintaining the draft context cancels the gain.
-- Only if at least 1 GiB is left after everything else is loaded.
+- Only if at least 1 GiB is left after everything else is loaded, plus the draft model's own weight where one is used.
 
 When it is off, `--spec-type none` is passed explicitly. A state shown on screen should be controlled by the launcher, not inherited from a default that can change between releases.
 
@@ -203,7 +221,7 @@ Useful invocations:
 
 ```powershell
 # Start a specific configuration with no menus
-powershell -ExecutionPolicy Bypass -File serve.ps1 -ModelKey stable9b -Backend cuda13 -Context 131072 -Vision
+powershell -ExecutionPolicy Bypass -File serve.ps1 -ModelKey qwen35-9b -Backend cuda13 -Context 131072 -Vision
 
 # Require the entire catalog before copying to a USB stick
 powershell -ExecutionPolicy Bypass -File verify.ps1 -Full
@@ -309,16 +327,35 @@ Every file `llmfit` touches is backed up next to the original as `.llmfit-backup
 
 ---
 
+## Models
+
+| Model | Catalog key | Weights | KV at 128K | Max context | MTP |
+| --- | --- | --- | --- | --- | --- |
+| Gemma 4 E4B QAT | `gemma4-e4b` | 4.22 GB | 1.10 GiB | 128K | draft model |
+| Gemma 4 12B QAT | `gemma4-12b` | 6.72 GB | 0.72 GiB | 256K | draft model |
+| Qwen 3.5 9B Q6_K | `qwen35-9b` | 7.46 GB | 1.25 GiB | 256K | — |
+| Qwen 3.8 27B UD-Q3_K_XL | `qwen38-27b` | 13.15 GB | 2.50 GiB | 256K | embedded |
+| Gemma 4 26B-A4B QAT | `gemma4-26b-a4b` | 14.25 GB | 0.84 GiB | 256K | draft model |
+
+All of them are Unsloth quantizations with an optional vision encoder. KV figures are at the default `q4_1`.
+
+Note the ordering: the 26B-A4B has the **heaviest weights and the lightest KV cache** in the catalog. It is a mixture of experts — 8 of 128 experts run per token, but all 128 have to be resident, so you pay the full 14.25 GB for weights while its 5 context-scaling layers keep the cache tiny.
+
+To add your own model, put an entry in `config/models.json` with its URL, SHA-256 and the two KV coefficients derived from its GGUF header. Each existing entry records the derivation in a `detail` block so you can copy the reasoning.
+
 ## Reference measurements
 
 A 16 GB NVIDIA card, measured with `nvidia-smi`:
 
-| Configuration | VRAM used | Free | Generation |
+| Configuration | Estimated | VRAM used | Generation |
 | --- | --- | --- | --- |
-| 27B + vision, 64K, `q4_0` | 15202 MiB | 794 MiB | 50.8 tok/s |
-| 27B no vision, 128K, `q4_0` | 15076 MiB | 920 MiB | 50.3 tok/s |
+| Qwen 27B + vision, 64K, `q4_0` | 15203 MiB | 15202 MiB | 50.8 tok/s |
+| Qwen 27B no vision, 128K, `q4_0` | 15063 MiB | 15076 MiB | 50.3 tok/s |
+| Gemma 4 E4B + vision + MTP, 128K, `q4_1` | 6758 MiB | 4676 MiB | 89.1 tok/s |
 
-A 27B at Q3 running entirely on the GPU, with the vision encoder loaded. The overhead model (256 MiB base, 448 MiB extra with vision) predicts both cases to within 15 MiB.
+A 27B at Q3 running entirely on the GPU with the vision encoder loaded, and the whole Gemma pipeline including a speculative draft model.
+
+The overhead constants (256 MiB base, 448 MiB extra with vision) were calibrated against Qwen and predict it to within 15 MiB. **On Gemma the estimate runs about 30 % high** — `shared_kv_layers` is not subtracted and Gemma's vision encoder is lighter than Qwen's. The error is deliberately on the safe side: `FITS` is never claimed for something that does not fit, but `TOO BIG` can be pessimistic on Gemma. Calibrating the Gemma constants is on the roadmap.
 
 ---
 
@@ -367,6 +404,7 @@ Get-Process llama-server | Stop-Process -Force
 
 - macOS on Apple Silicon (Metal backend, unified memory budgeting)
 - Linux (CUDA / ROCm / Vulkan)
+- Calibrate the overhead constants per architecture (they are Qwen-derived today)
 - More models in the catalog
 
 ---
