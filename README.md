@@ -90,7 +90,9 @@ Enter accepts the highlighted option in each step.
      no GPU: uses system RAM
 ```
 
-**Usable** is what the card will actually give you. On NVIDIA that is `nvidia-smi`'s live free memory whenever it is lower than the nominal figure, so a browser or a model someone else left running is accounted for instead of silently overcommitted. Otherwise it is total minus the driver reserve.
+**Usable** is what the card will actually give you, minus a safety margin (`safetyMarginPercent`, 10 % by default). Windows does not hand a single process the last of the dedicated VRAM: WDDM keeps headroom for the desktop and quietly pages the excess into system RAM. There is no error, only a slowdown.
+
+Beyond that, On NVIDIA that is `nvidia-smi`'s live free memory whenever it is lower than the nominal figure, so a browser or a model someone else left running is accounted for instead of silently overcommitted. Otherwise it is total minus the driver reserve.
 
 > The `free` value reported by `llama-server --list-devices` is deliberately *not* used: it is static. It returns the same number with an empty GPU and with 15 GB in use. Only `total` is trustworthy.
 
@@ -115,18 +117,23 @@ Turning vision off skips the `mmproj` file. That saves its weight — between 17
 
 ### 3. Context
 
-The table is computed for the model and vision setting you just chose, against the budget of the device you picked. Here is the tightest case — the 27B with vision on a 16 GB card:
+The table is computed for the model and vision setting you just chose, against the budget of the device you picked. Here is the tightest case — the 27B without vision on a 16 GB card:
 
 ```
-KV quantized to q4_1 (0.625 bytes per element).
+KV cache in f16 (2 bytes per element).
 hybrid attention/SSM: 16 of 65 layers hold a KV cache.
 
-1)   64K   KV  1.3 GiB   estimated total  15.0 GiB   TIGHT
-2)  128K   KV  2.5 GiB   estimated total  16.3 GiB   TOO BIG
-3)  256K   KV  5.0 GiB   estimated total  18.8 GiB   TOO BIG
+1)   32K   KV  2.0 GiB   estimated total  13.9 GiB   TIGHT
+2)   48K   KV  3.0 GiB   estimated total  14.9 GiB   TOO BIG
+3)   56K   KV  3.5 GiB   estimated total  15.4 GiB   TOO BIG
+4)   64K   KV  4.0 GiB   estimated total  15.9 GiB   TOO BIG
+5)  128K   KV  8.0 GiB   estimated total  19.9 GiB   TOO BIG
+6)  256K   KV 16.0 GiB   estimated total  27.9 GiB   TOO BIG
 ```
 
-The same card running the 9B with vision reports `FITS` at all three lengths, topping out at 11.0 GiB for 256K.
+That is what a 27B costs on 16 GB: 32K and nothing more. The Gemma 4 12B on the same card reports `FITS` at every length, 256K included, at 10.9 GiB.
+
+The shorter options exist because context is the cheapest thing to give up. Halving it frees real memory and keeps the model on the GPU, which quantizing the cache does not.
 
 **This is the part most tools get wrong.** Not every layer's cache grows with context, and modern architectures lean on that hard.
 
@@ -147,17 +154,28 @@ Assuming every layer scales overestimates the cache by 4× or more and rules out
 
 `FITS` leaves at least 8 % headroom, `TIGHT` fits with none, `TOO BIG` exceeds the budget. You can still pick a `TOO BIG` option — `llama.cpp` will offload layers to RAM and run much slower.
 
-#### KV quantization
+#### KV quantization costs you the GPU
 
-Set `cacheType` in `config/server.json`. Default is `q4_1`. Drop to `q4_0` to buy context at a small quality cost.
+The default is `f16`, and quantizing the KV cache is **not** the free context win it looks like. Measured on this build, same model, same prompt, same card:
 
-| Type | Bytes/element | 27B KV at 64K |
+| `cacheType` | VRAM | Prompt processing | Generation |
+| --- | --- | --- | --- |
+| `f16` *(default)* | 8310 MiB | **3355 tok/s** | **65.1 tok/s** |
+| `q4_1` | 7172 MiB | 40 tok/s | 10.9 tok/s |
+
+A gigabyte saved for **84× slower prompt processing**. CUDA flash-attention has no kernel for a quantized KV cache, so attention falls off the GPU and runs on the CPU. The weights stay resident on the card, `nvidia-smi` reports normal memory use, and nothing anywhere reports an error — the GPU simply sits at a few percent utilisation while the CPU does the work.
+
+If you need the context badly enough to pay that, the types are there:
+
+| Type | Bytes/element | 27B KV at 32K |
 | --- | --- | --- |
-| `f16` | 2 | 4.0 GiB |
-| `q8_0` | 1.0625 | 2.1 GiB |
-| `q5_1` | 0.75 | 1.5 GiB |
-| `q4_1` *(default)* | 0.625 | 1.3 GiB |
-| `q4_0` | 0.5625 | 1.1 GiB |
+| `f16` *(default)* | 2 | 2.0 GiB |
+| `q8_0` | 1.0625 | 1.1 GiB |
+| `q5_1` | 0.75 | 768 MiB |
+| `q4_1` | 0.625 | 640 MiB |
+| `q4_0` | 0.5625 | 576 MiB |
+
+Prefer a shorter context over a quantized cache. The fit table offers 32K, 48K and 56K precisely so you can trade context for memory without leaving the GPU.
 
 ### 4. Speculative decoding (MTP)
 
@@ -379,6 +397,8 @@ Every model in the catalog has been measured against `nvidia-smi` on a 16 GB NVI
 
 Across 18 configurations spanning all five models, two vision settings and context lengths from 64K to 256K, the **worst error is 1 MiB**.
 
+The 27B at 32K with an `f16` cache measures 14254 MiB against an estimate of 14196, and runs at 1542 tok/s prompt and 42.7 tok/s generation — on the GPU, where it belongs.
+
 Every figure comes from running `serve.ps1` itself and reading `nvidia-smi`, never from an ad-hoc `llama-server` invocation. That matters: an earlier round of Qwen constants was fitted to hand-written commands that omitted `--parallel 1` and `--image-min-tokens`, and it overestimated by 800 MiB.
 
 Getting there took two corrections that no amount of reading the header would have produced:
@@ -431,7 +451,9 @@ powershell -ExecutionPolicy Bypass -File verify.ps1 -Full   # require the whole 
 
 **It says TIGHT and I want headroom.** Lower `cacheType` to `q4_0` in `config/server.json`, or pick the no-vision variant.
 
-**It loaded, but generation crawls and prompt processing is in the tens of tokens per second.** It overflowed and llama.cpp is running layers from system RAM. Free the card — a browser with hardware acceleration costs hundreds of megabytes — and pick a smaller context or drop vision. `llmfit` reads live free VRAM on NVIDIA, so re-running it after closing things will report a larger budget.
+**It loaded, but prompt processing is in the tens of tokens per second and the GPU sits near idle.** Check `cacheType` in `config/server.json`. A quantized KV cache has no CUDA flash-attention kernel, so attention runs on the CPU while the weights stay parked in VRAM — memory looks healthy, utilisation does not. Set it back to `f16` and shorten the context instead.
+
+If the cache is already `f16`, then it overflowed and llama.cpp is running layers from system RAM. Free the card — a browser with hardware acceleration costs hundreds of megabytes — and pick a smaller context or drop vision.
 
 **"A local llama-server is already running."** Answer `Y` to replace it, or `n` to keep using the one already up.
 

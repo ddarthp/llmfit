@@ -3,8 +3,10 @@
   "port": 8080,
   "_budgetComment": "The 'free' value reported by llama-server --list-devices is static: it does not reflect what other processes are using. The budget is therefore total minus the driver reserve, assuming an idle GPU. Measured example: 16303 total - 308 reserved = 15995, identical to nvidia-smi 'free' at idle.",
   "deviceReserveMiB": 320,
-  "_cacheComment": "KV cache types supported by llama.cpp with their bytes per element. q4_1 = 20 bytes per block of 32; q4_0 = 18. Dropping to q4_0 buys about 10% more context at a small quality cost.",
-  "cacheType": "q4_1",
+  "_safetyComment": "Windows does not let one process hold all of the dedicated VRAM: WDDM keeps headroom for the desktop compositor and quietly moves the excess to shared memory, which is system RAM. There is no error, only a collapse in speed. Measured on a 16 GB card: a configuration nvidia-smi reported at 14564 of 16303 MiB already had 256 MiB spilled. The margin is a percentage of total memory held back so the fit table stops promising the last gigabyte.",
+  "safetyMarginPercent": 10,
+  "_cacheComment": "KV cache types with their bytes per element. f16 is the default for a reason measured on this build: CUDA flash-attention has no kernel for a quantized KV cache, so the attention falls off the GPU and runs on the CPU. Memory stays allocated on the card and nothing reports an error, but prompt processing drops from 3355 to 40 tokens per second. Quantizing the KV buys context at the price of the GPU: only do it deliberately.",
+  "cacheType": "f16",
   "cacheTypeBytes": {
     "f16": 2,
     "q8_0": 1.0625,
@@ -17,6 +19,9 @@
   "computeOverheadMiB": 256,
   "visionOverheadMiB": 448,
   "contextOptions": [
+    32768,
+    49152,
+    57344,
     65536,
     131072,
     262144

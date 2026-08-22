@@ -221,6 +221,7 @@ $piProvider = $serverConfig.harness.piProvider
 $openCodeProvider = $serverConfig.harness.openCodeProvider
 $codexProfile = $serverConfig.harness.codexProfile
 $deviceReserveMiB = [double]$serverConfig.deviceReserveMiB
+$safetyMarginPercent = [double]$serverConfig.safetyMarginPercent
 
 if ($Help) {
   Write-Host 'Usage: llmfit'
@@ -308,9 +309,18 @@ if ($best -and $best.Name -match 'NVIDIA') {
     $budgetSource = 'free right now, other processes are using the card'
   }
 }
+# Hold back a slice of the card. Windows will not hand a single process the
+# last of the dedicated VRAM; it silently pages the excess into system RAM,
+# where there is no error to see and generation just crawls.
+$safetyMiB = 0
+if ($best -and $safetyMarginPercent -gt 0) {
+  $safetyMiB = [math]::Round($best.TotalMiB * $safetyMarginPercent / 100)
+  $budgetMiB = $budgetMiB - $safetyMiB
+}
 $budgetLabel = if ($best) {
   "$($best.Id) ($($best.Name)), $(Format-MiB $budgetMiB) usable"
 } else { "system RAM, $(Format-MiB $budgetMiB)" }
+if ($safetyMiB -gt 0) { $budgetSource += ", holding back $(Format-MiB $safetyMiB)" }
 
 # ------------------------------------------------------ 2. MODEL AND VISION
 
@@ -361,7 +371,8 @@ Write-Step 3 'CONTEXT'
 $cacheType = $serverConfig.cacheType
 $cacheBytes = [double]$serverConfig.cacheTypeBytes[$cacheType]
 if (-not $cacheBytes) { throw "Unknown KV cache type in config/server.json: $cacheType" }
-Write-Host "  KV quantized to $cacheType ($cacheBytes bytes per element)." -ForegroundColor DarkGray
+$cacheNote = if ($cacheType -like 'f*' -or $cacheType -like 'bf*') { 'full precision, attention stays on the GPU' } else { 'QUANTIZED: attention falls back to the CPU on CUDA' }
+Write-Host "  KV cache in $cacheType, $cacheBytes bytes per element ($cacheNote)." -ForegroundColor DarkGray
 Write-Host "  $($model.geometry.summary)." -ForegroundColor DarkGray
 Write-Host ''
 
@@ -510,6 +521,18 @@ for ($attempt = 0; $attempt -lt 300; $attempt++) {
 }
 if (-not $ready) { throw "llama.cpp was not ready within 300 seconds. Check the server window." }
 
+# Whatever the estimate said, Windows has the final word. Ask it directly
+# rather than leaving a silent slowdown for the user to discover.
+$spilledMiB = 0
+try {
+  $server = Get-Process llama-server -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($server) {
+    $samples = (Get-Counter '\GPU Process Memory(*)\Shared Usage' -ErrorAction Stop).CounterSamples |
+      Where-Object { $_.InstanceName -like "*pid_$($server.Id)*" }
+    $spilledMiB = [math]::Round((($samples | Measure-Object CookedValue -Sum).Sum) / 1MB)
+  }
+} catch {}
+
 # ------------------------------------------------------------------ summary
 
 Write-Host ''
@@ -525,6 +548,12 @@ Write-Host "  Estimated : $(Format-MiB $finalMiB) of $(Format-MiB $budgetMiB) us
 Write-Host "  API       : $apiBase"
 Write-Host "  Chat UI   : $apiRoot  (built into llama.cpp, always available)"
 Write-Host '  The server stays in its own window. Leave it open.' -ForegroundColor DarkGray
+if ($spilledMiB -gt 64) {
+  Write-Host ''
+  Write-Host "  WARNING: $(Format-MiB $spilledMiB) of this is in shared memory, not on the card." -ForegroundColor Yellow
+  Write-Host '  Windows paged it into system RAM. Generation will be far slower than it should be.' -ForegroundColor Yellow
+  Write-Host '  Free the GPU, or re-run and pick a smaller context or the no-vision variant.' -ForegroundColor Yellow
+}
 
 if ($chosen) {
   Write-Host ''
