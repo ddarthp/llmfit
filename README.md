@@ -6,7 +6,7 @@
 
 No install step, no build, no Git needed on the target machine. Copy the folder, run one command.
 
-> **Status:** Windows (CUDA / Vulkan / CPU). macOS Apple Silicon and Linux are on the roadmap.
+> **Status:** Windows (CUDA / Vulkan / CPU) and macOS on Apple Silicon (Metal). Linux is on the roadmap.
 
 ---
 
@@ -21,6 +21,7 @@ No install step, no build, no Git needed on the target machine. Copy the folder,
 - [What is *not* in this repository](#what-is-not-in-this-repository)
 - [Models](#models)
 - [Configuration](#configuration)
+- [What is different on macOS](#what-is-different-on-macos)
 - [Just chatting](#just-chatting)
 - [Using it from your editor](#using-it-from-your-editor)
 - [Reference measurements](#reference-measurements)
@@ -48,19 +49,25 @@ The result is a fit table you can trust *before* you wait three minutes for a 13
 
 ## Requirements
 
-| | |
-| --- | --- |
-| OS | Windows 10 / 11 (x64) |
-| PowerShell | 5.1, the one bundled with Windows |
-| GPU | Optional. NVIDIA via CUDA, AMD/Intel via Vulkan, or CPU only |
-| Disk | 4.2 GB for the smallest model without vision, ~51 GB for the whole catalog |
-| Network | Only on first run, to download the model and the backend |
+| | Windows | macOS |
+| --- | --- | --- |
+| OS | Windows 10 / 11 (x64) | macOS on Apple Silicon (M1–M4) |
+| Runtime | PowerShell 5.1, the one bundled with Windows | zsh, and PowerShell 7 downloaded on first run |
+| GPU | Optional. NVIDIA via CUDA, AMD/Intel via Vulkan, or CPU only | Metal, always present |
+| Disk | 4.2 GB for the smallest model without vision, ~69 GB for the whole catalog | the same, plus 183 MB for PowerShell |
+| Network | Only on first run, to download the model and the backend | the same |
 
-Nothing else. The harnesses (Pi, OpenCode, Codex) are optional: without one, `llmfit` still runs the server and you point anything OpenAI-compatible at it.
+Nothing else, and nothing installed. The harnesses (Pi, OpenCode, Codex) are optional: without one, `llmfit` still runs the server and you point anything OpenAI-compatible at it.
+
+**On macOS the launcher needs PowerShell, and it fetches its own.** There is no runtime both systems ship — Windows has no shell, macOS has no PowerShell — so the alternative was maintaining the fit arithmetic twice and letting two implementations drift apart. Instead `llmfit` stays one codebase and treats PowerShell as one more dependency: downloaded, checked against its SHA-256, extracted into `tools/pwsh`, never installed. Nothing is written outside the folder, no Homebrew, no admin rights. A `pwsh` already on your `PATH` is used as is and nothing is downloaded.
+
+Intel Macs are not supported: the catalog carries the `macos-arm64` build of `llama.cpp` only.
 
 ---
 
 ## Quick start
+
+**Windows**
 
 ```powershell
 git clone https://github.com/ddarthp/llmfit.git
@@ -68,9 +75,19 @@ cd llmfit
 .\START.cmd
 ```
 
-On first run it downloads the backend and the model you pick, verifying both by SHA-256.
+**macOS**
 
-To get a global `llmfit` command, run `INSTALL-PATH.cmd` once and open a new terminal.
+```zsh
+git clone https://github.com/ddarthp/llmfit.git
+cd llmfit
+./START.command
+```
+
+`START.command` is also double-clickable from Finder.
+
+On first run it downloads the backend and the model you pick, verifying both by SHA-256. On macOS it fetches PowerShell first, the same way.
+
+To get a global `llmfit` command, run `INSTALL-PATH.cmd` (Windows) or `INSTALL-PATH.command` (macOS) once and open a new terminal.
 
 ---
 
@@ -90,11 +107,28 @@ Enter accepts the highlighted option in each step.
      no GPU: uses system RAM
 ```
 
-**Usable** is what the card will actually give you, minus a safety margin (`safetyMarginPercent`, 10 % by default). Windows does not hand a single process the last of the dedicated VRAM: WDDM keeps headroom for the desktop and quietly pages the excess into system RAM. There is no error, only a slowdown.
+On macOS there is one entry, because there is one answer:
 
-Beyond that, On NVIDIA that is `nvidia-smi`'s live free memory whenever it is lower than the nominal figure, so a browser or a model someone else left running is accounted for instead of silently overcommitted. Otherwise it is total minus the driver reserve.
+```
+  System RAM: 24.0 GiB
+  Apple Silicon shares that RAM with the GPU. The budget below is the slice
+  macOS recommends a single process keep resident, not a separate pool.
+
+1) Apple Metal (M1-M4, unified memory)                  [recommended]
+     MTL0     Apple M4 Pro                  17.8 GiB recommended,  17.8 GiB usable
+```
+
+**Usable** is what the machine will actually give you, and how it is reached differs by platform because the number `llama.cpp` reports means different things.
+
+On **Windows**, `total` is the card's raw dedicated VRAM with nothing held back, so `llmfit` subtracts a driver reserve and then a safety margin (`safetyMarginPercent`, 10 % by default). Windows does not hand a single process the last of the dedicated VRAM: WDDM keeps headroom for the desktop and quietly pages the excess into system RAM. There is no error, only a slowdown. On NVIDIA the budget is instead `nvidia-smi`'s live free memory whenever that is lower, so a browser or a model someone else left running is accounted for rather than silently overcommitted.
+
+On **macOS**, `total` is already `recommendedMaxWorkingSetSize` — what macOS itself recommends one process keep resident. Measured on a 24 GiB M4 Pro it reads 18186 MiB, 74 % of the machine: the OS has already held back 6.4 GB before `llmfit` sees the number. So both constants are **zero** on macOS, and that is not the same as having no margin. Subtracting a reserve calibrated against an NVIDIA driver, or a second margin for a WDDM paging behaviour that does not exist on unified memory, would count the same headroom twice and rule out configurations that fit.
+
+There is no separate pool of video memory on Apple Silicon. The weights, the KV cache and everything the OS is doing come out of the same RAM, which is why the menu prints the machine's total above the budget.
 
 > The `free` value reported by `llama-server --list-devices` is deliberately *not* used: it is static. It returns the same number with an empty GPU and with 15 GB in use. Only `total` is trustworthy.
+
+> Metal also reports `BLAS: Accelerate (0 MiB, 0 MiB free)`, which matches the device pattern exactly but is a compute library, not memory you can spend. Anything reporting no memory is dropped rather than listed as a GPU with none.
 
 ### 2. Model
 
@@ -184,7 +218,9 @@ Decided automatically, and it tells you why:
 - Only if the model ships MTP at all. It comes in two shapes:
   - **Embedded** — Qwen 3.8 27B carries `nextn_predict_layers = 1` inside the model file.
   - **Separate draft model** — every Gemma 4 ships an `mtp-*.gguf` companion, downloaded on demand and passed with `--spec-draft-model`.
-- Only on CUDA. On Vulkan the cost of maintaining the draft context cancels the gain.
+  - **Separate full build** — Qwen 3.6 35B-A3B publishes MTP as a different 16 GB model file (41 blocks against 40, 753 tensors against 733). That makes it a choice at download time, not a toggle at step 4, so the catalog entry declares no `mtp` block and explains why. Register the MTP build as its own entry if you want it.
+- Only on a backend that declares `speculativeDecoding: true` in `config/backends.json`. CUDA and Metal do. Vulkan does not: the cost of maintaining the draft context was measured there and cancels the gain.
+- Only up to a `maxContext` when the catalog records one. That ceiling is the longest context somebody actually ran, not a derived limit — see [what is different on macOS](#what-is-different-on-macos).
 - Only if its measured cost fits in what is left, with a margin. See the [table above](#reference-measurements) for what each model charges.
 - Only if the catalog lets it. `mtp.autoEnable: false` turns it off for a model regardless. **The Qwen 27B ships with it off**: on a 16 GB card that model already sits near the ceiling, and 1200 MiB more leaves nothing for anything else touching the GPU. Set it to `true` if your card has room.
 
@@ -222,13 +258,15 @@ Open whatever folder you want to work in, paste, done. The server stays in its o
 
 ### Entry points
 
-| Command | What it does |
-| --- | --- |
-| `llmfit` | The interactive launcher. Available globally after `INSTALL-PATH.cmd` |
-| `START.cmd` | Same launcher, without touching `PATH`. Double-click friendly |
-| `INSTALL-PATH.cmd` | Adds `bin\`, `tools\node` and Pi to the user `PATH`. Run once, no admin rights |
-| `VERIFY.cmd` | Checks the integrity of everything installed |
-| `CLEAN.cmd` | Deletes already-extracted archives to reclaim disk |
+| Windows | macOS | What it does |
+| --- | --- | --- |
+| `llmfit` | `llmfit` | The interactive launcher. Available globally after the PATH installer |
+| `START.cmd` | `START.command` | Same launcher, without touching `PATH`. Double-click friendly |
+| `INSTALL-PATH.cmd` | `INSTALL-PATH.command` | Puts the launcher on your `PATH`. Run once, no admin rights |
+| `VERIFY.cmd` | `VERIFY.command` | Checks the integrity of everything installed |
+| `CLEAN.cmd` | `CLEAN.command` | Deletes already-extracted archives to reclaim disk |
+
+On Windows the PATH installer adds `bin\`, `tools\node` and Pi to the user `PATH` through the registry. On macOS it writes a marked block into `~/.zshrc` (or `~/.bash_profile`) adding `bin/` only — `tools/node` and `tools/pi` are runtimes a Windows package vendors so an offline machine can still run Pi, and on macOS Pi is an npm install like any other. The file is backed up as `.llmfit-backup` before the first write and re-running only rewrites the block.
 
 ### PowerShell scripts
 
@@ -240,7 +278,7 @@ Open whatever folder you want to work in, paste, done. The server stays in its o
 | `clean.ps1` | `-IncludeLogs` `-Force` | Reclaim disk. `-Force` skips the confirmation |
 | `install-path.ps1` | — | `PATH` setup |
 
-Useful invocations:
+Useful invocations, Windows:
 
 ```powershell
 # Start a specific configuration with no menus
@@ -256,11 +294,32 @@ $env:LLMFIT_DEBUG=1; .\START.cmd
 Get-Process llama-server | Stop-Process -Force
 ```
 
+And macOS:
+
+```zsh
+# Start a specific configuration with no menus
+./tools/pwsh/pwsh -NoProfile -File serve.ps1 -ModelKey qwen35-9b -Backend metal -Context 131072 -Vision
+
+# Require the entire catalog before copying to an external disk
+./tools/pwsh/pwsh -NoProfile -File verify.ps1 -Full
+
+# See the raw device list when GPU detection misbehaves
+LLMFIT_DEBUG=1 ./START.command
+
+# Follow the server, which has no window of its own here
+tail -f llama-server.log
+
+# Stop the server
+pkill -x llama-server
+```
+
 ---
 
 ## What is in this repository
 
-Plain text, about 85 KB: five PowerShell scripts, the harness definitions in `lib/`, four JSON files in `config/`, and the `.cmd` wrappers that make them double-clickable. Nothing is generated and nothing is vendored.
+Plain text: five PowerShell scripts, the harness definitions and the macOS bootstrap in `lib/`, five JSON files in `config/`, and the `.cmd` and `.command` wrappers that make them double-clickable on each system. Nothing is generated and nothing is vendored.
+
+The launcher itself is one codebase. `lib/bootstrap.zsh` is the only part written twice over, and it does not duplicate any logic: it exists solely to put a PowerShell on the machine and hand over.
 
 ## What is *not* in this repository
 
@@ -271,7 +330,8 @@ No weights, no binaries, no encoders. They are downloaded on first use and verif
 | Model weights (`.gguf`) | Hugging Face — `unsloth/Qwen3.5-9B-GGUF`, `unsloth/Qwen3.8-27B-GGUF`, `unsloth/gemma-4-*-it-qat-GGUF` | 4.2–14.3 GB each |
 | Vision encoders (`mmproj`) | The same repositories | 175 MB – 1.2 GB each |
 | Speculative draft models (`mtp-*.gguf`) | The same repositories | 57–254 MB, only fetched when MTP is enabled |
-| `llama.cpp` binaries | Official GitHub release artifacts (`ggml-org/llama.cpp`, build `b10566`) | 18–510 MB |
+| `llama.cpp` binaries | Official GitHub release artifacts (`ggml-org/llama.cpp`, build `b10566`) | 11–510 MB |
+| PowerShell 7 (macOS only) | Official GitHub release artifact (`PowerShell/PowerShell`, `v7.6.5`) | 68 MB, 183 MB extracted |
 
 These paths are ignored by Git and never committed:
 
@@ -288,19 +348,36 @@ Model weights belong to their respective publishers under their own licenses.
 
 | Model | Model name to use | Weights | Vision | KV at 128K | Max context | MTP |
 | --- | --- | --- | --- | --- | --- | --- |
-| Gemma 4 E4B QAT | `gemma4-e4b-qat` | 4.22 GB | 990 MB | 0.64 GiB | 128K | draft model |
-| Gemma 4 12B QAT | `gemma4-12b-qat` | 6.72 GB | 175 MB | 0.72 GiB | 256K | draft model |
-| Qwen 3.5 9B Q6_K | `qwen3.5-9b-q6` | 7.46 GB | 876 MB | 1.25 GiB | 256K | — |
-| Qwen 3.8 27B UD-Q3_K_XL | `qwen3.8-27b-q3` | 13.15 GB | 885 MB | 2.50 GiB | 256K | embedded |
-| Gemma 4 26B-A4B QAT | `gemma4-26b-a4b-qat` | 14.25 GB | 1.19 GB | 0.84 GiB | 256K | draft model |
+| Gemma 4 E4B QAT | `gemma4-e4b-qat` | 4.22 GB | 990 MB | 2.0 GiB | 128K | draft model |
+| Gemma 4 12B QAT | `gemma4-12b-qat` | 6.72 GB | 175 MB | 2.3 GiB | 256K | draft model |
+| Qwen 3.5 9B Q6_K | `qwen3.5-9b-q6` | 7.46 GB | 876 MB | 4.0 GiB | 256K | — |
+| Qwen 3.8 27B UD-Q3_K_XL | `qwen3.8-27b-q3` | 13.15 GB | 885 MB | 8.0 GiB | 256K | embedded |
+| Gemma 4 26B-A4B QAT | `gemma4-26b-a4b-qat` | 14.25 GB | 1.19 GB | 2.7 GiB | 256K | draft model |
+| Qwen 3.6 35B-A3B UD-Q3_K_XL | `qwen3.6-35b-a3b-q3` | 16.85 GB | 899 MB | 2.5 GiB | 256K | separate build |
 
 The middle column is the name your harness needs — see [using it from your editor](#using-it-from-your-editor). `config/models.json` keys them slightly differently (`gemma4-e4b` rather than `gemma4-e4b-qat`); the key is only for `serve.ps1 -ModelKey`.
 
-All of them are Unsloth quantizations with an optional vision encoder. KV figures are at the default `q4_1`. The whole catalog, weights plus encoders plus draft models, is about 51 GB on disk — you only ever download what you pick.
+All of them are Unsloth quantizations with an optional vision encoder. **KV figures are at `f16`**, so they are 3.2× the `q4_1` numbers an earlier revision of this table carried — the default changed and the table did not follow it. The 35B-A3B is the one model that ships with a quantized cache, and only on macOS; see below. The whole catalog, weights plus encoders plus draft models, is about 69 GB on disk — you only ever download what you pick.
+
+### A model can pick its own KV cache type
+
+`cacheType` in `config/server.json` is the default for everything. A model may override it, optionally per platform, when the type is what decides whether a context is reachable at all:
+
+```json
+"cache": {
+  "macos":   { "type": "q8_0" },
+  "windows": { "type": "f16" }
+}
+```
+
+The 35B-A3B is the only entry that does this, and the two halves have different reasons. Its weights are 15.7 GiB before the encoder's 858 MiB, so on a 24 GiB Mac — where Metal recommends 17.8 GiB — `f16` leaves no room for a cache at any length, while `q8_0` halves it and brings 32K and 48K within reach. On Windows it stays `f16` deliberately: quantizing the cache on CUDA was measured on this build at 40 tok/s prompt processing against 3355, because CUDA flash attention has no quantized-KV kernel and attention silently moves to the CPU. **A card big enough for this model is a card big enough for an `f16` cache.**
+
+`q8_0` on Metal is **not measured**. The collapse above is a CUDA finding; whether Metal has the same hole nobody here has checked. Run it once each way and compare tokens per second before trusting it.
 
 Two things worth reading off that table:
 
-- **The 26B-A4B has the heaviest weights and the lightest KV cache.** It is a mixture of experts: 8 of 128 experts run per token but all 128 must be resident, so you pay the full 14.25 GB for weights while its 5 context-scaling layers keep the cache tiny. On a 16 GB card it fits with vision at 64K, with about 350 MiB to spare.
+- **The 35B-A3B is the largest model here and has a cheaper cache than the 27B.** It is both a mixture of experts (8 of 256 active, all 256 resident) and a hybrid attention/SSM, and it holds two KV heads per attention layer where the 9B and 27B hold four. Ten of its forty layers keep a cache, at 10240 elements per token against the 27B's 32768. Weights are what costs you here, not context.
+- **The 26B-A4B has the heaviest Gemma weights and the lightest KV cache.** It is a mixture of experts: 8 of 128 experts run per token but all 128 must be resident, so you pay the full 14.25 GB for weights while its 5 context-scaling layers keep the cache tiny. On a 16 GB card it fits with vision at 64K, with about 350 MiB to spare.
 - **The E4B's KV figure is measured, not derived.** Its header implies 1.10 GiB at 128K; the card says 0.64 GiB. `shared_kv_layers = 18` is the reason, and the header never says which layers share, so the catalog carries the measured coefficient.
 
 To add your own model, put an entry in `config/models.json` with its URL, SHA-256 and the two KV coefficients derived from its GGUF header. Every existing entry records its derivation — and, where measurement disagreed with the header, what was measured and why — in a `detail` block.
@@ -311,14 +388,147 @@ Everything tunable lives in `config/`. No values are hardcoded in the scripts.
 
 | File | Defines |
 | --- | --- |
-| `config/models.json` | Catalog: alias, URL, SHA-256, and geometry read from the GGUF header |
-| `config/backends.json` | Backends: URL, SHA-256, extracted file counts |
-| `config/server.json` | Host, port, KV type, driver reserve, overheads, context options, provider names |
-| `config/runtimes.json` | Node and Pi: path, entrypoint, file counts |
+| `config/models.json` | Catalog: alias, URL, SHA-256, geometry read from the GGUF header, and the publisher's sampling profiles |
+| `config/backends.json` | Backends: platform, URL, SHA-256, extracted file counts, whether MTP pays off |
+| `config/server.json` | Host, port, KV type, per-platform budget constants, overheads, context options, provider names |
+| `config/runtimes.json` | Node and Pi, vendored into a Windows package: path, entrypoint, file counts |
+| `config/bootstrap.json` | The PowerShell the macOS entry points fetch. Read by `zsh` with `jq` before any PowerShell exists |
+
+Each backend declares the `platform` it runs on and the launcher only offers the ones that match, so a Mac is never shown a CUDA package it cannot execute and Windows is never shown Metal.
+
+The `platforms` block in `config/server.json` holds the two constants that turn a reported device total into a budget, and they are per platform because the reported total does not mean the same thing on both. See [step 1](#1-architecture).
 
 The `harness` section defines the name each tool uses for the local provider. Match it to what you already have — registering a second name creates a duplicate provider pointing at the same server.
 
 Each model may carry its own `overhead` block with measured `baseMiB` and `visionMiB` values. When it does, those win over the defaults in `config/server.json`. A new model works without one; it just inherits constants measured on something else, so measure it if the numbers matter to you.
+
+### Sampling belongs to the model
+
+Every model carries the sampling profiles its publisher recommends, and the launcher sends all six values to `llama-server` explicitly. Nothing is inherited from a llama.cpp default, because those defaults match no model here and can change between releases:
+
+| Model | Active profile | temp | top-p | top-k | min-p | presence | repeat |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Qwen 3.5 9B | `coding` | 0.6 | 0.95 | 20 | 0.0 | 0.0 | 1.0 |
+| Qwen 3.8 27B | `coding` | 0.6 | 0.95 | 20 | 0.0 | 0.0 | 1.0 |
+| Gemma 4 (all three) | `default` | 1.0 | 0.95 | **64** | 0.0 | 0.0 | 1.0 |
+| *anything with no block* | `llamacpp-defaults` | 0.8 | 0.95 | 40 | 0.05 | 0.0 | 1.0 |
+
+**`top-k` is 20 for Qwen and 64 for Gemma.** One number cannot serve both families, which is the whole reason this moved out of `serve.ps1`.
+
+Each model also carries the alternatives, so switching is one word rather than six numbers. Qwen ships `coding`, `thinking` and `instruct`:
+
+```json
+"sampling": {
+  "profile": "coding",
+  "profiles": { "coding": { ... }, "thinking": { ... }, "instruct": { ... } }
+}
+```
+
+Two things are worth knowing before you trust the table:
+
+- **Only Qwen 3.5 publishes a profile for coding.** The Qwen 3.8 `coding` profile is the one extrapolated set of numbers in the catalog, and it is labelled as such in the file: Qwen 3.5 documents its coding profile as its thinking profile with the temperature dropped to 0.6 and the presence penalty zeroed, and the same adjustment is applied here. Switch that model to `thinking` for numbers its publisher actually states.
+- **Google publishes only `temperature`, `top_p` and `top_k` for Gemma 4.** The other three are pinned here to the values that disable them, rather than left out, because `llama-server` defaults `min-p` to 0.05 and inheriting a filter nobody asked for is worse than switching it off deliberately.
+
+Thinking mode is a separate control from sampling and the launcher does not set it: Gemma 4 and Qwen 3.5 use `--chat-template-kwargs '{"enable_thinking":false}'`, Qwen 3.8 uses `--chat-template-kwargs '{"reasoning_effort":"medium"}'` with `xhigh`, `medium`, `low` and `none` available.
+
+### How long a reply the harness is allowed
+
+A reply and the prompt that provoked it come out of the same window, so the limit handed to a harness is a **share of the context you actually loaded**, not a number frozen in the catalog. `harness.maxOutputPercent` in `config/server.json` sets the share and each model's `maxTokens` caps it:
+
+| Context loaded | 32K | 48K | 64K | 128K | 256K |
+| --- | --- | --- | --- | --- | --- |
+| Output limit written to the harness | 8192 | 12288 | 16384 | 32768 | 32768 |
+
+At 25 % a coding agent keeps three quarters of the window for the files and history it has to send, and 32K lands on the 8192 this project shipped before. From 128K up the model's ceiling binds instead.
+
+**A longer reply costs no memory.** The KV cache is allocated for the whole `--ctx-size` when the model loads; generating fills it rather than growing it. Measured on Metal with the 27B at 32K:
+
+| | Resident |
+| --- | --- |
+| After load, nothing generated | 15438 MiB |
+| After 100 tokens | 15603 MiB |
+| After 2000 tokens | 15318 MiB |
+
+Twenty times the output, no more memory — the variation is ordinary page-cache noise. What a long reply spends is context.
+
+Only Qwen 3.5 publishes a figure to cap against, *"Adequate Output Length: 32,768 tokens for most queries"*. Qwen 3.8 borrows it as the same family and generation; Google publishes nothing of the kind for Gemma 4, so those ceilings are chosen rather than stated. Each `maxTokens` says which it is.
+
+---
+
+## What is different on macOS
+
+Everything above works the same way on both systems, with three exceptions worth knowing before you rely on the numbers.
+
+### The server has no window of its own
+
+On Windows the server opens its own console and stays there. macOS has no equivalent short of driving Terminal through AppleScript, which raises a permission prompt you can refuse, so the server is detached instead and writes to a log next to the launcher:
+
+```zsh
+tail -f llama-server.log        # what the server is printing
+tail -f llama-server.err.log    # where llama.cpp puts its progress
+pkill -x llama-server           # stop it
+```
+
+It is started under `nohup`, so it survives the terminal that launched it closing — the same "start a session, close it, the model is still loaded" behaviour the Windows window gives you.
+
+### The fit table is not calibrated on Metal yet
+
+This is the honest limitation. The KV column is **exact on both platforms**: it comes from the two coefficients read out of the GGUF header, and that arithmetic has nothing platform-specific in it. The *estimated total* adds a per-model overhead constant, and every one of those was measured against `nvidia-smi` on CUDA.
+
+Until someone measures them on Apple Silicon, `llmfit` falls back to the CUDA constants and says so on screen rather than implying an accuracy nobody verified:
+
+```
+  NOTE: no overhead measured on this platform yet, so the CUDA constants are
+  standing in. The KV column is exact; the estimated total is a guess until
+  someone measures it here and adds an overhead.macos block to models.json.
+```
+
+The gap is not cosmetic. Those constants are negative for three models, which encodes "part of this file never reaches VRAM" — and on unified memory there is no transfer for that statement to be about. To fix it for a model, run it, read the real usage, and add the measured values to its `overhead` block:
+
+```json
+"overhead": {
+  "baseMiB": -389,
+  "visionMiB": 251,
+  "macos": { "baseMiB": 0, "visionMiB": 0 }
+}
+```
+
+The platform block wins when present; without one the top-level numbers are used and the warning appears.
+
+### Speculative decoding is available, and on one model it was measured to be pointless
+
+Metal declares `speculativeDecoding: true`, so the option exists. What each model does with it is decided in its own `mtp` block, which may carry a sub-block named after the platform. Nothing about MTP travelled between CUDA and Metal — not what it costs, not how far up the context range it survives, not whether it is worth having:
+
+```json
+"mtp": {
+  "mode": "embedded",
+  "costMiB": 1200,
+  "autoEnable": false,
+  "macos": {
+    "autoEnable": true,
+    "costMiB": 817,
+    "maxContext": 32768
+  }
+}
+```
+
+The one model measured so far is the **Qwen 3.8 27B**, on a 24 GiB M4 Pro with vision:
+
+| | 32K, no MTP | 32K, MTP |
+| --- | --- | --- |
+| Resident | 15717 MiB | 16534 MiB |
+| Generation | **10.7 tok/s** | **10.6 tok/s** |
+
+Draft acceptance was 0.93 with a mean draft length of 3.79 — so the drafting works, and the speedup still does not arrive. The likely reason is architectural rather than a tuning failure: this is a hybrid attention/SSM model where 3 layers in 4 hold recurrent state, and an SSM layer walks its state forward one position at a time. Verifying 3.79 drafted tokens in one pass therefore still costs 3.79 sequential state updates, which is exactly the work speculative decoding exists to avoid. That is the standing explanation, not something measured directly, and it does not carry over to the Gemma 4 models — they are pure sliding-window attention with a small companion draft file, an entirely different bet, still untested here.
+
+**`maxContext` is a measured ceiling, and it is doing real work.** `costMiB` is modelled as a flat number, but an embedded draft context carries its own KV cache and therefore grows with context. At 48K with vision the memory check would have waved MTP through; the configuration then loads, answers `/health` with `ok`, and dies on its first decode:
+
+```
+error: Insufficient Memory (kIOGPUCommandBufferCallbackErrorOutOfMemory)
+llama_decode: failed to decode, ret = -3
+```
+
+Loading successfully is not proof that a configuration fits on Metal. Until the cost is modelled per token the way the main KV cache already is, the honest bound is the longest context somebody actually ran, and raising it means running the thing you are raising it for.
 
 ---
 
@@ -384,7 +594,7 @@ Every file `llmfit` touches is backed up next to the original as `.llmfit-backup
 
 ## Reference measurements
 
-Every model in the catalog has been measured against `nvidia-smi` on a 16 GB NVIDIA card (an RTX 5070 Ti). A sample:
+Every model in the catalog has been measured against `nvidia-smi` on a 16 GB NVIDIA card (an RTX 5070 Ti). **Every figure in this section is CUDA**; see [what is different on macOS](#what-is-different-on-macos) for what that means when you run on Metal. A sample:
 
 | Configuration | Estimated | VRAM used | Generation |
 | --- | --- | --- | --- |
@@ -437,9 +647,13 @@ powershell -ExecutionPolicy Bypass -File verify.ps1 -Full   # require the whole 
 
 1. Copy the whole folder to the stick. A full catalog runs to about 52 GB with the backends, so size the stick for what you actually keep, and format it **exFAT or NTFS** — FAT32 cannot hold files over 4 GB and every GGUF here is larger.
 2. On the target machine, copy it from the stick to a local SSD. Do not run models straight off a slow stick.
-3. Run `VERIFY.cmd` and wait for confirmation. It re-checks the SHA-256 of every model and binary, which is what catches a copy that was silently truncated.
-4. Run `INSTALL-PATH.cmd` once.
+3. Run `VERIFY.cmd` (or `VERIFY.command`) and wait for confirmation. It re-checks the SHA-256 of every model and binary, which is what catches a copy that was silently truncated.
+4. Run `INSTALL-PATH.cmd` (or `INSTALL-PATH.command`) once.
 5. Open a new terminal and run `llmfit`.
+
+The catalog is portable but the binaries are not: a folder carried from Windows has the CUDA, Vulkan and CPU backends, and a Mac needs the Metal one. The models are the expensive part and they are shared, so the target machine downloads 11 MB of backend and gets going. Copying between two machines of the same kind needs no download at all.
+
+`VERIFY` only checks what belongs to the system it runs on, so a Windows package verified on a Mac reports the models as fine and the Metal backend as not installed, rather than calling the CUDA one missing.
 
 ---
 
@@ -469,20 +683,34 @@ Or edit `settings.json` yourself. To check whether Pi is healthy without opening
 pi --provider llama-cpp --model qwen3.5-9b-q6 -p "say OK"
 ```
 
-**Restore my previous configuration.** Every file the launcher touched has a `.llmfit-backup` copy next to it.
+**Restore my previous configuration.** Every file the launcher touched has a `.llmfit-backup` copy next to it, including `~/.zshrc` on macOS.
+
+**macOS: `zsh: permission denied: ./START.command`.** The executable bit did not survive however the folder reached you. `chmod +x START.command VERIFY.command CLEAN.command INSTALL-PATH.command bin/llmfit`.
+
+**macOS: the launcher refuses to start on an Intel Mac.** Only the `macos-arm64` build of `llama.cpp` is in the catalog. Add the `macos-x64` archive to `config/backends.json` with its SHA-256 if you need it.
+
+**macOS: I already have PowerShell and do not want another copy.** You will not get one. A `pwsh` on your `PATH` reporting version 7 or newer is used as is and nothing is downloaded.
+
+**macOS: the estimated total looks wrong.** It probably is, by some amount nobody has measured. Read [what is different on macOS](#what-is-different-on-macos): the KV column is exact, the overhead constants behind the total are borrowed from CUDA.
 
 **Stop the server.**
 
 ```powershell
-Get-Process llama-server | Stop-Process -Force
+Get-Process llama-server | Stop-Process -Force   # Windows
+```
+
+```zsh
+pkill -x llama-server                            # macOS
 ```
 
 ---
 
 ## Roadmap
 
-- macOS on Apple Silicon (Metal backend, unified memory budgeting)
+- Overhead constants measured on Apple Silicon, so the macOS fit table is calibrated rather than borrowed
+- Whether speculative decoding pays off on Metal, measured rather than assumed
 - Linux (CUDA / ROCm / Vulkan)
+- Intel Macs (the `macos-x64` build)
 - More models in the catalog
 
 ---

@@ -4,3 +4,7 @@
 # Windows launchers keep CRLF in the working tree.
 *.cmd text eol=crlf
 *.bat text eol=crlf
+
+# macOS launchers must keep LF: zsh will not run a script with CRLF endings.
+*.command text eol=lf
+*.zsh text eol=lf

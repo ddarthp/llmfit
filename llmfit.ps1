@@ -8,6 +8,22 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $modelsDirectory = Join-Path $root 'models'
 $toolsDirectory = Join-Path $root 'tools'
 
+# ------------------------------------------------------------------ platform
+
+# $IsWindows and $IsMacOS are PowerShell 7 automatic variables. Windows
+# PowerShell 5.1 does not define them at all, and that absence is itself the
+# answer: 5.1 only ever runs on Windows. They cannot be assigned to, because
+# PowerShell 7 makes them read-only, hence the separate names.
+$onWindows = if ($null -ne $IsWindows) { [bool]$IsWindows } else { $true }
+$onMacOS = if ($null -ne $IsMacOS) { [bool]$IsMacOS } else { $false }
+$platform = if ($onMacOS) { 'macos' } else { 'windows' }
+$exeSuffix = if ($onWindows) { '.exe' } else { '' }
+$serverExe = "llama-server$exeSuffix"
+# On Windows the bundled curl is curl.exe; invoking it unqualified would find
+# the PowerShell alias for Invoke-WebRequest instead, which takes none of these
+# flags. On macOS there is no such alias and the binary is plain curl.
+$curlCommand = if ($onWindows) { 'curl.exe' } else { 'curl' }
+
 # ------------------------------------------------------------------- helpers
 
 function ConvertTo-Hashtable {
@@ -107,7 +123,7 @@ function Ensure-Artifact {
     }
     # --retry lets curl ride out transient drops on its own; -C - makes every
     # retry pick up where the file stopped instead of starting again.
-    & curl.exe -L --fail --show-error --progress-bar -C - --retry 5 --retry-delay 3 --retry-all-errors -o $Path $Url
+    & $curlCommand -L --fail --show-error --progress-bar -C - --retry 5 --retry-delay 3 --retry-all-errors -o $Path $Url
     if ($LASTEXITCODE -ne 0) {
       Write-Host "  Transfer interrupted (curl exit $LASTEXITCODE)." -ForegroundColor Yellow
     }
@@ -120,19 +136,37 @@ function Ensure-Artifact {
   Write-Host "  OK: $name" -ForegroundColor Green
 }
 
+function Expand-Package {
+  param([string]$ArchivePath, [string]$Destination, [int]$StripComponents = 0)
+  # The Windows backends ship as zips that extract flat. The macOS backend is a
+  # tar.gz whose contents sit one directory down, under llama-b<build>, so it
+  # asks for that level to be stripped and lands flat like the others.
+  # Expand-Archive cannot read a tar.gz at all, and tar preserves the execute
+  # bit that a Mach-O binary needs, which is the other reason not to unify them.
+  if ($ArchivePath -match '\.(tar\.gz|tgz)$') {
+    $tarArguments = @('-xzf', $ArchivePath, '-C', $Destination)
+    if ($StripComponents -gt 0) { $tarArguments += "--strip-components=$StripComponents" }
+    & tar @tarArguments
+    if ($LASTEXITCODE -ne 0) { throw "Could not extract $ArchivePath (tar exit $LASTEXITCODE)" }
+  } else {
+    Expand-Archive -LiteralPath $ArchivePath -DestinationPath $Destination -Force
+  }
+}
+
 function Ensure-Backend {
   param([hashtable]$Backend)
   $destination = Join-Path $toolsDirectory $Backend.folder
-  if (Test-Path -LiteralPath (Join-Path $destination 'llama-server.exe')) { return }
+  if (Test-Path -LiteralPath (Join-Path $destination $serverExe)) { return }
   Write-Host "  Preparing backend: $($Backend.name)" -ForegroundColor Cyan
   New-Item -ItemType Directory -Force -Path $destination | Out-Null
   foreach ($archive in $Backend.archives) {
     $archivePath = Join-Path (Join-Path $root 'downloads') $archive.file
     Ensure-Artifact -Path $archivePath -Url $archive.url -Sha256 $archive.sha256
-    Expand-Archive -LiteralPath $archivePath -DestinationPath $destination -Force
+    $strip = if ($archive.stripComponents) { [int]$archive.stripComponents } else { 0 }
+    Expand-Package -ArchivePath $archivePath -Destination $destination -StripComponents $strip
   }
-  if (-not (Test-Path -LiteralPath (Join-Path $destination 'llama-server.exe'))) {
-    throw "Backend package does not contain llama-server.exe: $destination"
+  if (-not (Test-Path -LiteralPath (Join-Path $destination $serverExe))) {
+    throw "Backend package does not contain ${serverExe}: $destination"
   }
 }
 
@@ -140,7 +174,7 @@ function Ensure-Backend {
 
 function Get-BackendDevices {
   param([string]$Folder)
-  $exe = Join-Path (Join-Path $toolsDirectory $Folder) 'llama-server.exe'
+  $exe = Join-Path (Join-Path $toolsDirectory $Folder) $serverExe
   if (-not (Test-Path -LiteralPath $exe)) { return @() }
   $devices = @()
   try {
@@ -150,8 +184,15 @@ function Get-BackendDevices {
       foreach ($item in $raw) { Write-Host "  [debug]   <$($item.GetType().Name)> $item" -ForegroundColor Magenta }
     }
     foreach ($line in $raw) {
-      # llama.cpp format: "  CUDA0: <device name> (16302 MiB, 15037 MiB free)"
+      # One format covers every backend, which is why Metal needed no new parser:
+      #   CUDA0: NVIDIA GeForce RTX 5070 Ti (16302 MiB, 15037 MiB free)
+      #   MTL0:  Apple M4 Pro               (18186 MiB, 18185 MiB free)
       if ("$line" -match '^\s*(\S+):\s+(.+?)\s+\((\d+)\s+MiB,\s+(\d+)\s+MiB free\)\s*$') {
+        # Metal also lists "BLAS: Accelerate (0 MiB, 0 MiB free)", a compute
+        # library rather than a device with memory of its own. It matches the
+        # pattern perfectly and would show up in the menu as a GPU with no
+        # memory, so anything reporting no memory is not a device to budget for.
+        if ([int]$matches[3] -le 0) { continue }
         $devices += [pscustomobject]@{
           Id = $matches[1]; Name = $matches[2]
           TotalMiB = [int]$matches[3]; FreeMiB = [int]$matches[4]
@@ -178,6 +219,58 @@ function Get-LiveFreeMiB {
     }
   } catch {}
   return $null
+}
+
+function ConvertTo-ShellQuoted {
+  # Single quotes are the only construct sh does not interpret anything inside,
+  # so wrapping in them and closing-escaping-reopening around any embedded
+  # quote makes a path safe whatever it contains. Needed because the macOS
+  # server launch goes through sh -c; see the comment where it is built.
+  param([string]$Value)
+  return "'" + $Value.Replace("'", "'\''") + "'"
+}
+
+function Get-PlatformSetting {
+  # Any config block may carry a sub-block named after a platform, and a value
+  # there wins over the same key at the top level. Almost nothing measured on
+  # one backend turned out to hold on the other - what MTP costs, how far up the
+  # context range it survives, whether it is worth enabling, whether quantizing
+  # the KV cache is free or ruinous - so the shape is shared rather than
+  # reinvented per setting. On Windows there is no 'windows' sub-block unless
+  # someone writes one, and every lookup falls through to the top level.
+  param($Block, [string]$Platform, [string]$Name)
+  if (-not $Block) { return $null }
+  if ($Block.Contains($Platform)) {
+    $inner = $Block[$Platform]
+    if ($inner -and $inner.Contains($Name) -and $null -ne $inner[$Name]) { return $inner[$Name] }
+  }
+  if ($Block.Contains($Name)) { return $Block[$Name] }
+  return $null
+}
+
+function Get-CacheType {
+  # The KV cache type is global by default and overridable per model, because
+  # what it costs is not a property of the launcher. Quantizing it was measured
+  # on CUDA to move attention off the GPU and collapse prompt processing from
+  # 3355 to 40 tokens per second, so a model that wants a quantized cache
+  # usually wants it on one platform and not the other.
+  param($Model, $ServerConfig, [string]$Platform)
+  $type = Get-PlatformSetting -Block $Model.cache -Platform $Platform -Name 'type'
+  if ($type) { return @{ Type = $type; Source = "config/models.json ($($Model.alias))" } }
+  return @{ Type = $ServerConfig.cacheType; Source = 'config/server.json' }
+}
+
+function Get-SystemRamMiB {
+  # Win32_ComputerSystem is a WMI class and does not exist off Windows; the
+  # macOS answer comes from sysctl, which is always present.
+  try {
+    if ($onWindows) {
+      return [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB)
+    }
+    $bytes = [double](& sysctl -n hw.memsize)
+    if ($bytes -gt 0) { return [math]::Round($bytes / 1MB) }
+  } catch {}
+  return 0
 }
 
 function Format-MiB {
@@ -216,12 +309,25 @@ $apiRoot = "http://$($serverConfig.host):$($serverConfig.port)"
 $apiBase = "$apiRoot/v1"
 # Keys starting with '_' are documentation inside the catalog, not models.
 $modelKeys = @($catalog.Keys | Where-Object { -not $_.StartsWith('_') })
-$backendKeys = @($backends.Keys)
+# Only the backends that can run here. A CUDA zip is not something a Mac should
+# be offered and then fail to execute.
+$backendKeys = @($backends.Keys | Where-Object {
+  -not $_.StartsWith('_') -and $backends[$_].platform -eq $platform
+})
+if (-not $backendKeys.Count) {
+  throw "config/backends.json declares no backend for platform '$platform'."
+}
 $piProvider = $serverConfig.harness.piProvider
 $openCodeProvider = $serverConfig.harness.openCodeProvider
 $codexProfile = $serverConfig.harness.codexProfile
-$deviceReserveMiB = [double]$serverConfig.deviceReserveMiB
-$safetyMarginPercent = [double]$serverConfig.safetyMarginPercent
+
+# What --list-devices calls 'total' is raw dedicated VRAM on Windows and the
+# already-conservative recommendedMaxWorkingSetSize on Metal, so the constants
+# that turn it into a budget are per platform. See config/server.json.
+$platformConfig = $serverConfig.platforms[$platform]
+if (-not $platformConfig) { throw "config/server.json has no platforms.$platform block." }
+$deviceReserveMiB = [double]$platformConfig.deviceReserveMiB
+$safetyMarginPercent = [double]$platformConfig.safetyMarginPercent
 
 if ($Help) {
   Write-Host 'Usage: llmfit'
@@ -243,15 +349,18 @@ Write-Host "  $('=' * 62)" -ForegroundColor Cyan
 
 Write-Step 1 'AVAILABLE ARCHITECTURES'
 
-$systemRamMiB = 0
-try { $systemRamMiB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB) } catch {}
+$systemRamMiB = Get-SystemRamMiB
 Write-Host "  System RAM: $(Format-MiB $systemRamMiB)"
+if ($onMacOS) {
+  Write-Host '  Apple Silicon shares that RAM with the GPU. The budget below is the slice' -ForegroundColor DarkGray
+  Write-Host '  macOS recommends a single process keep resident, not a separate pool.' -ForegroundColor DarkGray
+}
 Write-Host ''
 
 $options = @()
 foreach ($key in $backendKeys) {
   $backend = $backends[$key]
-  $installed = Test-Path -LiteralPath (Join-Path (Join-Path $toolsDirectory $backend.folder) 'llama-server.exe')
+  $installed = Test-Path -LiteralPath (Join-Path (Join-Path $toolsDirectory $backend.folder) $serverExe)
   $devices = @(if ($installed) { Get-BackendDevices -Folder $backend.folder } else { @() })
   # NOTE: the 'free' value from --list-devices is static and does not reflect
   # what other processes are using (it reports the same with an empty GPU and
@@ -278,8 +387,12 @@ for ($i = 0; $i -lt $options.Count; $i++) {
   $state = if ($option.Installed) { '' } else { ' [will be downloaded]' }
   Write-Host ("  {0,2}) {1}{2}{3}" -f ($i + 1), $option.Backend.name, $mark, $state)
   if ($option.Devices.Count) {
+    # Calling the Metal figure 'total' would be a lie: on a 24 GiB Mac it reads
+    # 18186 MiB, because it is what macOS recommends a process keep resident,
+    # not the size of the machine. On Windows it really is the card's total.
+    $totalLabel = if ($onMacOS) { 'recommended' } else { 'total' }
     foreach ($device in $option.Devices) {
-      Write-Host ("       {0,-8} {1,-28} {2,10} total, {3,10} usable" -f $device.Id, $device.Name, (Format-MiB $device.TotalMiB), (Format-MiB ($device.TotalMiB - $deviceReserveMiB))) -ForegroundColor DarkGray
+      Write-Host ("       {0,-8} {1,-28} {2,10} {3}, {4,10} usable" -f $device.Id, $device.Name, (Format-MiB $device.TotalMiB), $totalLabel, (Format-MiB ($device.TotalMiB - $deviceReserveMiB))) -ForegroundColor DarkGray
     }
   } elseif ($option.Key -eq 'cpu') {
     Write-Host ("       no GPU: uses system RAM, {0} nominally free" -f (Format-MiB $systemRamMiB)) -ForegroundColor DarkGray
@@ -298,7 +411,8 @@ if (-not $selected.Devices.Count -and $backendKey -ne 'cpu') {
   if ($selected.Devices.Count) { $selected.BudgetMiB = ($selected.Devices | Measure-Object -Property TotalMiB -Maximum).Maximum - $deviceReserveMiB }
 }
 $budgetMiB = $selected.BudgetMiB
-$budgetSource = 'total minus driver reserve'
+$budgetSource = if ($onMacOS) { 'what macOS recommends one process keep resident' }
+                else { 'total minus driver reserve' }
 $best = if ($selected.Devices.Count) { $selected.Devices | Sort-Object TotalMiB -Descending | Select-Object -First 1 } else { $null }
 if ($best -and $best.Name -match 'NVIDIA') {
   $live = Get-LiveFreeMiB
@@ -368,22 +482,62 @@ $visionMiB = if ($useVision) { Get-FileMiB (Join-Path $modelsDirectory $model.mm
 # -------------------------------------------------------------- 3. CONTEXT
 
 Write-Step 3 'CONTEXT'
-$cacheType = $serverConfig.cacheType
+$cacheChoice = Get-CacheType -Model $model -ServerConfig $serverConfig -Platform $platform
+$cacheType = $cacheChoice.Type
 $cacheBytes = [double]$serverConfig.cacheTypeBytes[$cacheType]
-if (-not $cacheBytes) { throw "Unknown KV cache type in config/server.json: $cacheType" }
-$cacheNote = if ($cacheType -like 'f*' -or $cacheType -like 'bf*') { 'full precision, attention stays on the GPU' } else { 'QUANTIZED: attention falls back to the CPU on CUDA' }
+if (-not $cacheBytes) {
+  throw "Unknown KV cache type '$cacheType' from $($cacheChoice.Source). Declared types: $(@($serverConfig.cacheTypeBytes.Keys) -join ', ')"
+}
+# The collapse a quantized KV cache causes was measured on CUDA, where flash
+# attention has no kernel for one and silently moves attention to the CPU. It
+# has not been measured on Metal, so it is not asserted there.
+$cacheNote = if ($cacheType -like 'f*' -or $cacheType -like 'bf*') {
+  'full precision, attention stays on the GPU'
+} elseif ($onMacOS) {
+  'QUANTIZED: costs prompt speed on CUDA; unmeasured on Metal'
+} else {
+  'QUANTIZED: attention falls back to the CPU on CUDA'
+}
 Write-Host "  KV cache in $cacheType, $cacheBytes bytes per element ($cacheNote)." -ForegroundColor DarkGray
+if ($cacheChoice.Source -ne 'config/server.json') {
+  Write-Host "  That type is set for this model in $($cacheChoice.Source), not globally." -ForegroundColor DarkGray
+}
 Write-Host "  $($model.geometry.summary)." -ForegroundColor DarkGray
 Write-Host ''
 
 # Overhead calibrated against nvidia-smi. It differs enough between
 # architectures that a model may carry its own measured values; the numbers in
 # server.json are the fallback for models nobody has measured yet.
-$overheadMiB = if ($null -ne $model.overhead.baseMiB) { [double]$model.overhead.baseMiB }
+#
+# Those measurements were all taken on CUDA. A model may carry a block measured
+# on another platform under that platform's name, and when it does not, the
+# CUDA constants are the best available guess rather than a calibrated figure.
+# The gap is not cosmetic on Apple Silicon: the negative base overheads encode
+# "part of this file never reaches VRAM", and on unified memory there is no
+# transfer for that statement to be about.
+$overheadBlock = $model.overhead
+$overheadCalibrated = $true
+if (-not $overheadBlock) {
+  # A model nobody has measured at all, on any platform. It still runs; the
+  # estimate just inherits constants fitted to a different model.
+  $overheadCalibrated = $false
+} elseif (-not $onWindows) {
+  $platformBlock = $null
+  if ($overheadBlock.Contains($platform)) { $platformBlock = $overheadBlock[$platform] }
+  if ($platformBlock) { $overheadBlock = $platformBlock } else { $overheadCalibrated = $false }
+}
+$overheadMiB = if ($overheadBlock -and $null -ne $overheadBlock.baseMiB) { [double]$overheadBlock.baseMiB }
                else { [double]$serverConfig.computeOverheadMiB }
 if ($useVision) {
-  $overheadMiB += if ($null -ne $model.overhead.visionMiB) { [double]$model.overhead.visionMiB }
+  $overheadMiB += if ($overheadBlock -and $null -ne $overheadBlock.visionMiB) { [double]$overheadBlock.visionMiB }
                   else { [double]$serverConfig.visionOverheadMiB }
+}
+if (-not $overheadCalibrated) {
+  $what = if ($model.overhead) { "measured on this platform" } else { "measured for this model" }
+  Write-Host "  NOTE: no overhead $what yet, so constants fitted to something" -ForegroundColor Yellow
+  Write-Host '  else are standing in. The KV column is exact; the estimated total is a guess' -ForegroundColor Yellow
+  Write-Host "  until someone measures it here and writes it into models.json." -ForegroundColor Yellow
+  Write-Host ''
 }
 $contexts = @()
 foreach ($context in $serverConfig.contextOptions) {
@@ -412,26 +566,44 @@ $contextSize = $contextEntry.Context
 
 # ------------------------------------------------------------------ 4. MTP
 
-# MTP only pays off on CUDA: on Vulkan the cost of maintaining the draft
-# context cancels out the gain. And only if the model ships nextn layers.
+# Whether MTP pays off is a property of the backend, measured per backend and
+# declared in config/backends.json rather than inferred from its name: on
+# Vulkan the cost of maintaining the draft context cancels out the gain. And
+# only if the model ships nextn layers.
 # What MTP costs is measured per model and differs by an order of magnitude:
 # an embedded draft context is built against the whole model, a companion draft
 # file is small. Counting it as free is how a configuration that reports FITS
 # ends up spilling into system RAM.
-$mtpCostMiB = if ($model.mtp -and $model.mtp.costMiB) { [double]$model.mtp.costMiB } else { 512 }
+#
+# Every setting below can be overridden per platform, because none of them
+# turned out to travel: the same model's embedded MTP costs 1200 MiB on CUDA
+# and 817 on Metal, and is worth enabling on one and not the other.
+$mtpCostRaw = Get-PlatformSetting -Block $model.mtp -Platform $platform -Name 'costMiB'
+$mtpCostMiB = if ($mtpCostRaw) { [double]$mtpCostRaw } else { 512 }
+$mtpAutoEnable = Get-PlatformSetting -Block $model.mtp -Platform $platform -Name 'autoEnable'
+$mtpMaxContext = Get-PlatformSetting -Block $model.mtp -Platform $platform -Name 'maxContext'
+$mtpNote = Get-PlatformSetting -Block $model.mtp -Platform $platform -Name 'note'
 $mtpHeadroomMiB = $mtpCostMiB + 256
 $useMtp = $false
 $mtpReason = ''
 if (-not $model.mtp) {
   $mtpReason = "this model ships no MTP layers"
-} elseif ($model.mtp.autoEnable -eq $false) {
+} elseif ($mtpAutoEnable -eq $false) {
   $mtpReason = "turned off for this model in config/models.json"
-} elseif ($backendKey -notlike 'cuda*') {
-  $mtpReason = "only enabled on CUDA (you picked $backendKey)"
+} elseif ($backend.speculativeDecoding -ne $true) {
+  $mtpReason = "not enabled for the $backendKey backend in config/backends.json"
+} elseif ($mtpMaxContext -and $contextSize -gt [int]$mtpMaxContext) {
+  # A ceiling that was measured, not derived. costMiB is modelled as a flat
+  # number, but an embedded draft context carries its own KV cache and so grows
+  # with the context length: the memory check below would wave through a
+  # configuration that loads, reports healthy, and then dies on its first
+  # decode. Until the cost is modelled per token, the honest bound is the
+  # longest context somebody actually ran.
+  $mtpReason = "only verified up to $([int]$mtpMaxContext / 1024)K on $platform and you picked $($contextSize / 1024)K"
 } elseif (($budgetMiB - $contextEntry.TotalMiB) -lt $mtpHeadroomMiB) {
   $margin = $budgetMiB - $contextEntry.TotalMiB
   $mtpReason = if ($margin -lt 0) {
-    "this configuration already exceeds VRAM by $(Format-MiB ([math]::Abs($margin)))"
+    "this configuration already exceeds the budget by $(Format-MiB ([math]::Abs($margin)))"
   } else {
     "it costs $(Format-MiB $mtpCostMiB) and only $(Format-MiB $margin) is left over"
   }
@@ -443,6 +615,9 @@ if (-not $model.mtp) {
 Write-Step 4 'SPECULATIVE DECODING (MTP)'
 if ($useMtp) {
   Write-Host "  Enabled: $mtpReason" -ForegroundColor Green
+  # What the catalog knows about this combination that the memory check cannot
+  # express, such as it having been measured to buy nothing.
+  if ($mtpNote) { Write-Host "  $mtpNote" -ForegroundColor Yellow }
   if ($model.mtp.mode -eq 'draft-model') {
     Write-Host "  Draft model: $($model.mtp.file)" -ForegroundColor DarkGray
     Ensure-Artifact -Path (Join-Path $modelsDirectory $model.mtp.file) -Url $model.mtp.url -Sha256 $model.mtp.sha256
@@ -453,7 +628,7 @@ if ($useMtp) {
 
 # -------------------------------------------------------------- 5. HARNESS
 
-. (Join-Path $root 'lib\harness.ps1')
+. (Join-Path $root (Join-Path 'lib' 'harness.ps1'))
 
 Write-Step 5 'HARNESS'
 $harnesses = Get-Harnesses -Alias $model.alias -ApiRoot $apiRoot -ApiBase $apiBase `
@@ -486,29 +661,74 @@ if ($chosen -and $chosen.Configure) {
 
 # ---------------------------------------------------------- start the server
 
-$running = Get-CimInstance Win32_Process -Filter "Name='llama-server.exe'" -ErrorAction SilentlyContinue |
-  Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($toolsDirectory, [System.StringComparison]::OrdinalIgnoreCase) }
-if ($running) {
+$runningIds = @()
+if ($onWindows) {
+  $runningIds = @(Get-CimInstance Win32_Process -Filter "Name='llama-server.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($toolsDirectory, [System.StringComparison]::OrdinalIgnoreCase) } |
+    ForEach-Object { $_.ProcessId })
+} else {
+  # Win32_Process is a WMI class and exists only on Windows. Get-Process gives
+  # the one thing that matters here anyway: the path the process was started
+  # from, which is how a server this launcher owns is told apart from someone
+  # else's llama-server on the same machine.
+  $runningIds = @(Get-Process -Name 'llama-server' -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -and $_.Path.StartsWith($toolsDirectory, [System.StringComparison]::OrdinalIgnoreCase) } |
+    ForEach-Object { $_.Id })
+}
+if ($runningIds.Count) {
   Write-Host ''
   $stop = Read-Host '  A local llama-server is already running. Stop it and load this configuration? [Y/n]'
   if ([string]::IsNullOrWhiteSpace($stop) -or $stop -match '^[sSyY]') {
-    $running | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+    $runningIds | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
     Start-Sleep -Seconds 2
   } else {
     throw 'Cancelled so the running server is not replaced.'
   }
 }
 
-$serverArgs = @(
-  '-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit',
-  '-File', ('"' + (Join-Path $root 'serve.ps1') + '"'),
-  '-ModelKey', $modelKey, '-Backend', $backendKey, '-Context', $contextSize
-)
-if ($useVision) { $serverArgs += '-Vision' }
-if ($useMtp) { $serverArgs += '-Mtp' }
+$serveScript = Join-Path $root 'serve.ps1'
+$serveArguments = @('-ModelKey', $modelKey, '-Backend', $backendKey, '-Context', "$contextSize")
+if ($useVision) { $serveArguments += '-Vision' }
+if ($useMtp) { $serveArguments += '-Mtp' }
 
 $powerShellHost = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
-Start-Process -FilePath $powerShellHost -ArgumentList $serverArgs -WorkingDirectory $root -WindowStyle Normal | Out-Null
+$serverLogPath = Join-Path $root 'llama-server.log'
+$serverErrorLogPath = Join-Path $root 'llama-server.err.log'
+
+if ($onWindows) {
+  # -NoExit keeps the console window up after the server stops, so whatever it
+  # printed on the way out is still readable. Start-Process joins ArgumentList
+  # into one command line that is then parsed again, so the script path carries
+  # its own quotes in case the folder has a space in it.
+  $serverArgs = @(
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit',
+    '-File', ('"' + $serveScript + '"')
+  ) + $serveArguments
+  Start-Process -FilePath $powerShellHost -ArgumentList $serverArgs `
+    -WorkingDirectory $root -WindowStyle Normal | Out-Null
+} else {
+  # macOS has no equivalent of "start this in its own console window" short of
+  # driving Terminal through AppleScript, which raises a permission prompt the
+  # user can refuse. The server is detached instead and its output goes to a log.
+  #
+  # The redirection deliberately does NOT use Start-Process -RedirectStandardOutput.
+  # On Unix that option pumps the child's output to the file from inside THIS
+  # process, so it stops the moment the launcher exits, which it does right
+  # after printing the summary below. Measured: with the parent kept alive the
+  # log fills normally, with the parent gone it stays at 0 bytes, and nothing
+  # anywhere reports an error. Handing the redirection to sh instead gives the
+  # child those file descriptors directly, so the log does not depend on this
+  # process still being around. nohup is what makes it survive the terminal
+  # that started it closing.
+  $quoted = @($powerShellHost, '-NoProfile', '-File', $serveScript) + $serveArguments |
+    ForEach-Object { ConvertTo-ShellQuoted $_ }
+  $command = 'nohup ' + ($quoted -join ' ') +
+    ' > ' + (ConvertTo-ShellQuoted $serverLogPath) +
+    ' 2> ' + (ConvertTo-ShellQuoted $serverErrorLogPath) + ' < /dev/null &'
+  # The call operator passes argv straight through on Unix. Start-Process would
+  # join and re-parse it, splitting this command on its spaces.
+  & '/bin/sh' '-c' $command
+}
 
 Write-Host ''
 Write-Host '  Loading the model...' -ForegroundColor Cyan
@@ -519,19 +739,29 @@ for ($attempt = 0; $attempt -lt 300; $attempt++) {
   } catch {}
   Start-Sleep -Seconds 1
 }
-if (-not $ready) { throw "llama.cpp was not ready within 300 seconds. Check the server window." }
+if (-not $ready) {
+  $where = if ($onWindows) { 'Check the server window.' } else { "Check $serverErrorLogPath" }
+  throw "llama.cpp was not ready within 300 seconds. $where"
+}
 
 # Whatever the estimate said, Windows has the final word. Ask it directly
 # rather than leaving a silent slowdown for the user to discover.
+#
+# There is no macOS counterpart, and inventing one would be worse than having
+# none: the counter measures VRAM that spilled into system RAM, and on unified
+# memory there is nowhere for it to spill from. When Metal runs out here the
+# symptom is the machine swapping, not a quiet migration nothing reports.
 $spilledMiB = 0
-try {
-  $server = Get-Process llama-server -ErrorAction SilentlyContinue | Select-Object -First 1
-  if ($server) {
-    $samples = (Get-Counter '\GPU Process Memory(*)\Shared Usage' -ErrorAction Stop).CounterSamples |
-      Where-Object { $_.InstanceName -like "*pid_$($server.Id)*" }
-    $spilledMiB = [math]::Round((($samples | Measure-Object CookedValue -Sum).Sum) / 1MB)
-  }
-} catch {}
+if ($onWindows) {
+  try {
+    $server = Get-Process llama-server -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($server) {
+      $samples = (Get-Counter '\GPU Process Memory(*)\Shared Usage' -ErrorAction Stop).CounterSamples |
+        Where-Object { $_.InstanceName -like "*pid_$($server.Id)*" }
+      $spilledMiB = [math]::Round((($samples | Measure-Object CookedValue -Sum).Sum) / 1MB)
+    }
+  } catch {}
+}
 
 # ------------------------------------------------------------------ summary
 
@@ -547,7 +777,13 @@ Write-Host "  MTP       : $(if ($useMtp) { "enabled (+$(Format-MiB $mtpCostMiB))
 Write-Host "  Estimated : $(Format-MiB $finalMiB) of $(Format-MiB $budgetMiB) usable"
 Write-Host "  API       : $apiBase"
 Write-Host "  Chat UI   : $apiRoot  (built into llama.cpp, always available)"
-Write-Host '  The server stays in its own window. Leave it open.' -ForegroundColor DarkGray
+if ($onWindows) {
+  Write-Host '  The server stays in its own window. Leave it open.' -ForegroundColor DarkGray
+} else {
+  Write-Host "  Log       : $serverLogPath" -ForegroundColor DarkGray
+  Write-Host '  The server is detached and outlives this terminal. Follow it with:' -ForegroundColor DarkGray
+  Write-Host "    tail -f `"$serverLogPath`"" -ForegroundColor DarkGray
+}
 if ($spilledMiB -gt 64) {
   Write-Host ''
   Write-Host "  WARNING: $(Format-MiB $spilledMiB) of this is in shared memory, not on the card." -ForegroundColor Yellow
@@ -588,5 +824,12 @@ foreach ($harness in $harnesses) {
 
 Write-Host ''
 Write-Host '  STOP THE SERVER' -ForegroundColor Cyan
-Write-Host '    Get-Process llama-server | Stop-Process -Force' -ForegroundColor DarkGray
+if ($onWindows) {
+  Write-Host '    Get-Process llama-server | Stop-Process -Force' -ForegroundColor DarkGray
+} else {
+  # -x matches the process name exactly. Without it, -f would also match this
+  # launcher's own command line and any editor that happens to have the string
+  # open, which is a bad habit to print in a summary people copy from.
+  Write-Host '    pkill -x llama-server' -ForegroundColor DarkGray
+}
 Write-Host ''

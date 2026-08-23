@@ -12,10 +12,37 @@
 # maximum context when 64K was loaded makes the harness plan for a window that
 # does not exist.
 
+# Paths are built with nested Join-Path and $HOME rather than a backslash
+# literal and $env:USERPROFILE. Join-Path only translates the separator it puts
+# between the two halves, so '.pi\agent' stays a backslash on macOS and becomes
+# part of the filename. $HOME is defined by PowerShell on every platform,
+# including Windows PowerShell 5.1; $env:USERPROFILE exists only on Windows.
+# The three harnesses keep the same locations relative to home on both.
+
+function Get-MaxOutputTokens {
+  # A reply and the prompt that provoked it come out of the same window, so what
+  # a harness may spend on one has to be derived from the context that was
+  # actually loaded, not from a number frozen in the catalog. The model's
+  # maxTokens is the publisher's ceiling and only ever lowers the result.
+  #
+  # None of this costs memory: the KV cache is sized for the whole --ctx-size
+  # when the model loads, and generating fills it rather than growing it.
+  # Measured on Metal: 15438 MiB after load, 15603 after 100 tokens, 15318
+  # after 2000. A long reply spends context, not VRAM.
+  param($Model, [int]$Context, $ServerConfig)
+  $percent = $ServerConfig.harness.maxOutputPercent
+  if (-not $percent) { $percent = 25 }
+  $share = [math]::Floor($Context * [double]$percent / 100)
+  if ($Model.maxTokens) { $share = [math]::Min($share, [int]$Model.maxTokens) }
+  # A window small enough to make the share useless is not a reason to hand a
+  # harness a limit it cannot write a function in.
+  return [int][math]::Max(1024, $share)
+}
+
 function Configure-Pi {
   param($Model, [int]$Context, [string]$ApiBase, $ServerConfig)
   $providerKey = $ServerConfig.harness.piProvider
-  $directory = Join-Path $env:USERPROFILE '.pi\agent'
+  $directory = Join-Path (Join-Path $HOME '.pi') 'agent'
   New-Item -ItemType Directory -Force -Path $directory | Out-Null
 
   $path = Join-Path $directory 'models.json'
@@ -35,7 +62,7 @@ function Configure-Pi {
       reasoning = $true
       input = @('text', 'image')
       contextWindow = $Context
-      maxTokens = $Model.maxTokens
+      maxTokens = Get-MaxOutputTokens -Model $Model -Context $Context -ServerConfig $ServerConfig
       cost = [ordered]@{ input = 0; output = 0; cacheRead = 0; cacheWrite = 0 }
     })
   }
@@ -72,7 +99,7 @@ function Configure-Pi {
 function Configure-OpenCode {
   param($Model, [int]$Context, [string]$ApiBase, $ServerConfig)
   $providerKey = $ServerConfig.harness.openCodeProvider
-  $directory = Join-Path $env:USERPROFILE '.config\opencode'
+  $directory = Join-Path (Join-Path $HOME '.config') 'opencode'
   $path = Join-Path $directory 'opencode.json'
   New-Item -ItemType Directory -Force -Path $directory | Out-Null
   if (Test-Path -LiteralPath $path) {
@@ -91,7 +118,7 @@ function Configure-OpenCode {
     tool_call = $true
     attachment = $true
     modalities = [ordered]@{ input = @('text', 'image'); output = @('text') }
-    limit = [ordered]@{ context = $Context; output = $Model.maxTokens }
+    limit = [ordered]@{ context = $Context; output = (Get-MaxOutputTokens -Model $Model -Context $Context -ServerConfig $ServerConfig) }
     options = [ordered]@{ temperature = 0.6; topP = 0.95 }
   }
   $config.provider[$providerKey] = [ordered]@{
@@ -123,7 +150,7 @@ function Set-ManagedBlock {
 function Configure-Codex {
   param($Model, [int]$Context, [string]$ApiBase, $ServerConfig)
   $profileName = $ServerConfig.harness.codexProfile
-  $directory = Join-Path $env:USERPROFILE '.codex'
+  $directory = Join-Path $HOME '.codex'
   New-Item -ItemType Directory -Force -Path $directory | Out-Null
 
   # Earlier versions wrote llama-local.config.toml, a standalone file Codex
@@ -165,7 +192,7 @@ function Get-Harnesses {
       Configure = ${function:Configure-Pi}
       IsConfigured = {
         param($ServerConfig)
-        $path = Join-Path $env:USERPROFILE '.pi\agent\models.json'
+        $path = Join-Path (Join-Path (Join-Path $HOME '.pi') 'agent') 'models.json'
         if (-not (Test-Path -LiteralPath $path)) { return $false }
         try { return $null -ne ((Get-Content -Raw -LiteralPath $path | ConvertFrom-Json).providers.($ServerConfig.harness.piProvider)) } catch { return $false }
       }
@@ -178,7 +205,7 @@ function Get-Harnesses {
       Configure = ${function:Configure-OpenCode}
       IsConfigured = {
         param($ServerConfig)
-        $path = Join-Path $env:USERPROFILE '.config\opencode\opencode.json'
+        $path = Join-Path (Join-Path (Join-Path $HOME '.config') 'opencode') 'opencode.json'
         if (-not (Test-Path -LiteralPath $path)) { return $false }
         try { return $null -ne ((Get-Content -Raw -LiteralPath $path | ConvertFrom-Json).provider.($ServerConfig.harness.openCodeProvider)) } catch { return $false }
       }
@@ -203,7 +230,7 @@ function Get-Harnesses {
       Configure = ${function:Configure-Codex}
       IsConfigured = {
         param($ServerConfig)
-        $path = Join-Path $env:USERPROFILE '.codex\config.toml'
+        $path = Join-Path (Join-Path $HOME '.codex') 'config.toml'
         if (-not (Test-Path -LiteralPath $path)) { return $false }
         return (Get-Content -Raw -LiteralPath $path) -match ("(?m)^\[profiles\." + [regex]::Escape($ServerConfig.harness.codexProfile) + "\]")
       }

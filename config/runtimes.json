@@ -1,6 +1,8 @@
 {
+  "_comment": "Runtimes a Windows package may carry alongside the launcher so a machine with no network can still run Pi. They are vendored by hand, not downloaded by any script here, and they are Windows-only: on macOS Pi is installed with npm like any other global tool, so verify.ps1 skips this whole section.",
   "node": {
     "name": "Node.js 24 (portable)",
+    "platform": "windows",
     "folder": "node",
     "entrypoint": "node.exe",
     "required": true,
@@ -11,6 +13,7 @@
   },
   "pi": {
     "name": "Pi coding agent",
+    "platform": "windows",
     "folder": "pi",
     "entrypoint": "node_modules/@earendil-works/pi-coding-agent/dist/cli.js",
     "required": true,

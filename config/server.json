@@ -1,21 +1,44 @@
 {
   "host": "127.0.0.1",
   "port": 8080,
-  "_budgetComment": "The 'free' value reported by llama-server --list-devices is static: it does not reflect what other processes are using. The budget is therefore total minus the driver reserve, assuming an idle GPU. Measured example: 16303 total - 308 reserved = 15995, identical to nvidia-smi 'free' at idle.",
-  "deviceReserveMiB": 320,
-  "_safetyComment": "Windows does not let one process hold all of the dedicated VRAM: WDDM keeps headroom for the desktop compositor and quietly moves the excess to shared memory, which is system RAM. There is no error, only a collapse in speed. Measured on a 16 GB card: a configuration nvidia-smi reported at 14564 of 16303 MiB already had 256 MiB spilled. The margin is a percentage of total memory held back so the fit table stops promising the last gigabyte.",
-  "safetyMarginPercent": 10,
-  "_cacheComment": "KV cache types with their bytes per element. f16 is the default for a reason measured on this build: CUDA flash-attention has no kernel for a quantized KV cache, so the attention falls off the GPU and runs on the CPU. Memory stays allocated on the card and nothing reports an error, but prompt processing drops from 3355 to 40 tokens per second. Quantizing the KV buys context at the price of the GPU: only do it deliberately.",
+  "_platformsComment": "What --list-devices reports as 'total' does not mean the same thing on both platforms, so the constants that turn it into a budget cannot be shared. On Windows it is the raw dedicated VRAM of the card, with nothing held back. On Metal it is already recommendedMaxWorkingSetSize, the figure macOS itself recommends a process stay under.",
+  "platforms": {
+    "windows": {
+      "_budgetComment": "The 'free' value reported by llama-server --list-devices is static: it does not reflect what other processes are using. The budget is therefore total minus the driver reserve, assuming an idle GPU. Measured example: 16303 total - 308 reserved = 15995, identical to nvidia-smi 'free' at idle.",
+      "deviceReserveMiB": 320,
+      "_safetyComment": "Windows does not let one process hold all of the dedicated VRAM: WDDM keeps headroom for the desktop compositor and quietly moves the excess to shared memory, which is system RAM. There is no error, only a collapse in speed. Measured on a 16 GB card: a configuration nvidia-smi reported at 14564 of 16303 MiB already had 256 MiB spilled. The margin is a percentage of total memory held back so the fit table stops promising the last gigabyte.",
+      "safetyMarginPercent": 10
+    },
+    "macos": {
+      "_budgetComment": "Both constants are zero on purpose, and that is not the same as having no margin. Metal reports recommendedMaxWorkingSetSize as its total: measured on a 24 GiB M4 Pro, --list-devices says 18186 MiB, which is 74% of the machine. macOS has already held back 6.4 GB for itself before llmfit sees the number. Subtracting a driver reserve calibrated against an NVIDIA card, or a second margin for a WDDM paging behaviour that does not exist here, would be counting the same headroom twice and would rule out configurations that fit.",
+      "deviceReserveMiB": 0,
+      "_safetyComment": "Raise safetyMarginPercent if you measure a spill on your own machine. It is not set defensively at a guess, because a fit table nobody measured is exactly what this project exists to replace.",
+      "safetyMarginPercent": 0
+    }
+  },
+  "_cacheComment": "KV cache types with their bytes per element. f16 is the default for a reason measured on this build: CUDA flash-attention has no kernel for a quantized KV cache, so the attention falls off the GPU and runs on the CPU. Memory stays allocated on the card and nothing reports an error, but prompt processing drops from 3355 to 40 tokens per second. Quantizing the KV buys context at the price of the GPU: only do it deliberately. That collapse is a CUDA finding and has not been measured on Metal, so the launcher only warns about it on the platform where it was observed.",
   "cacheType": "f16",
+  "_cacheTypesComment": "Must stay a subset of what the binary accepts: llama-server b10566 allows f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0 and q5_1. A type missing here stops the launcher with 'Unknown KV cache type' before anything loads. bf16 matters in particular because the Qwen 3.5 documentation recommends --cache-type-k bf16 --cache-type-v bf16 as the fix if generation comes out as gibberish. iq4_nl is left out on purpose: its bytes per element is not something to guess at.",
   "cacheTypeBytes": {
+    "f32": 4,
     "f16": 2,
+    "bf16": 2,
     "q8_0": 1.0625,
     "q5_1": 0.75,
     "q5_0": 0.6875,
     "q4_1": 0.625,
     "q4_0": 0.5625
   },
-  "_overheadComment": "Calibrated against nvidia-smi measurements on a 16 GB GPU with the 27B model: predicts real usage to within 15 MiB.",
+  "_samplingComment": "Fallback for a model whose catalog entry declares no sampling block of its own. These are llama-server's own defaults, written out rather than inherited: a model nobody has looked up gets the same behaviour it would have got anyway, but visibly, and the value cannot shift under you when llama.cpp changes a default between releases. Every model shipped in models.json carries its publisher's real numbers instead.",
+  "sampling": {
+    "profile": "llamacpp-defaults",
+    "profiles": {
+      "llamacpp-defaults": {
+        "temperature": 0.8, "topP": 0.95, "topK": 40, "minP": 0.05, "presencePenalty": 0.0, "repeatPenalty": 1.0
+      }
+    }
+  },
+  "_overheadComment": "Fallback for models that carry no measured overhead block of their own. Calibrated against nvidia-smi on a 16 GB GPU with the 27B model: predicts real usage to within 15 MiB on CUDA.",
   "computeOverheadMiB": 256,
   "visionOverheadMiB": 448,
   "contextOptions": [
@@ -30,6 +53,8 @@
     "piProvider": "llama-cpp",
     "openCodeProvider": "llamacpp",
     "codexProfile": "llama-local",
+    "_maxOutputComment": "What share of the loaded context a harness is told it may spend on one reply. It has to be a share and not a fixed number, because the catalog is static and the context is picked at run time: declaring a 32K reply on a 32K window tells the harness it can fill the whole thing and leave nothing for the prompt. A model's maxTokens caps the result, so this only ever lowers it. Costs no memory either way - the KV cache is allocated for the whole --ctx-size when the model loads, and generating tokens fills it rather than growing it. Measured on Metal: 15438 MiB after load, 15603 after 100 tokens, 15318 after 2000. What a long reply spends is context, not VRAM. 25% is chosen so a coding agent keeps three quarters of the window for the files and history it has to send, and it reproduces the 8192 this project shipped before, at the 32K it was presumably chosen for.",
+    "maxOutputPercent": 25,
     "piPackages": [],
     "piPackagesRetired": [],
     "_packagesComment": "Pi INSTALLS every registered package at startup; if one fails to build, Pi will not open. That is why piPackages is empty: install your extensions yourself, on the harness you choose. piPackagesRetired de-registers packages an earlier launcher version may have injected."
