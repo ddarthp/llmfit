@@ -6,20 +6,45 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$configDirectory = Join-Path $root 'config'
+$downloadsDirectory = Join-Path $root 'downloads'
+
+# Windows PowerShell 5.1 defines neither, and only ever runs on Windows. See llmfit.ps1.
+$onWindows = if ($null -ne $IsWindows) { [bool]$IsWindows } else { $true }
+$onMacOS = if ($null -ne $IsMacOS) { [bool]$IsMacOS } else { $false }
+$serverExe = if ($onWindows) { 'llama-server.exe' } else { 'llama-server' }
 
 # The llama.cpp archives are needed only once: after extraction the backend
-# lives in tools\. They can always be downloaded again, because the catalog
+# lives in tools/. They can always be downloaded again, because the catalog
 # stores the URL and SHA-256 of every one of them.
-$backends = Get-Content -Raw -LiteralPath (Join-Path $root 'config\backends.json') | ConvertFrom-Json
+$backends = Get-Content -Raw -LiteralPath (Join-Path $configDirectory 'backends.json') | ConvertFrom-Json
 $targets = @()
 foreach ($property in $backends.PSObject.Properties) {
+  # Keys starting with '_' are documentation, not backends.
+  if ($property.Name.StartsWith('_')) { continue }
   $backend = $property.Value
   $folder = Join-Path (Join-Path $root 'tools') $backend.folder
-  if (-not (Test-Path -LiteralPath (Join-Path $folder 'llama-server.exe'))) { continue }
+  if (-not (Test-Path -LiteralPath (Join-Path $folder $serverExe))) { continue }
   foreach ($archive in $backend.archives) {
-    $path = Join-Path (Join-Path $root 'downloads') $archive.file
+    $path = Join-Path $downloadsDirectory $archive.file
     if (Test-Path -LiteralPath $path) {
       $targets += [pscustomobject]@{ Path = $path; Reason = "backend '$($property.Name)' already extracted" }
+    }
+  }
+}
+
+# The portable PowerShell tarball the macOS bootstrap downloads is reclaimable
+# for the same reason: once tools/pwsh exists, the archive is 68 MB of nothing.
+if ($onMacOS) {
+  $bootstrapPath = Join-Path $configDirectory 'bootstrap.json'
+  if (Test-Path -LiteralPath $bootstrapPath) {
+    $bootstrap = (Get-Content -Raw -LiteralPath $bootstrapPath | ConvertFrom-Json).macos.arm64
+    $extracted = Join-Path (Join-Path $root 'tools') (Join-Path $bootstrap.folder $bootstrap.entrypoint)
+    if ($bootstrap -and (Test-Path -LiteralPath $extracted)) {
+      $archivePath = Join-Path $downloadsDirectory (Split-Path -Leaf ([uri]$bootstrap.url).AbsolutePath)
+      if (Test-Path -LiteralPath $archivePath) {
+        $targets += [pscustomobject]@{ Path = $archivePath; Reason = "$($bootstrap.name) already extracted" }
+      }
     }
   }
 }

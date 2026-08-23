@@ -1,0 +1,18 @@
+{
+  "_comment": "Read by START.command before any PowerShell exists on the machine, which is why this file is flat enough for jq and separate from server.json. macOS ships no PowerShell, so the launcher provisions a portable copy the same way it provisions llama.cpp: download, verify the SHA-256, extract, never install. A pwsh already on PATH is used instead and nothing is downloaded.",
+  "macos": {
+    "arm64": {
+      "name": "PowerShell 7.6.5 (portable)",
+      "version": "7.6.5",
+      "folder": "pwsh",
+      "entrypoint": "pwsh",
+      "url": "https://github.com/PowerShell/PowerShell/releases/download/v7.6.5/powershell-7.6.5-osx-arm64.tar.gz",
+      "sha256": "8196d4b4e7c21b7f6df9d45687bb4e42dc8335f330b580d9eb15f3ef5042a8c3",
+      "bytes": 68105059,
+      "tree": {
+        "files": 578,
+        "bytes": 192216590
+      }
+    }
+  }
+}

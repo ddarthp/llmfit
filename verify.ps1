@@ -9,6 +9,12 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $configDirectory = Join-Path $root 'config'
+
+# Windows PowerShell 5.1 defines neither, and only ever runs on Windows. See llmfit.ps1.
+$onWindows = if ($null -ne $IsWindows) { [bool]$IsWindows } else { $true }
+$onMacOS = if ($null -ne $IsMacOS) { [bool]$IsMacOS } else { $false }
+$platform = if ($onMacOS) { 'macos' } else { 'windows' }
+$serverExe = if ($onWindows) { 'llama-server.exe' } else { 'llama-server' }
 $models = Get-Content -Raw -LiteralPath (Join-Path $configDirectory 'models.json') | ConvertFrom-Json
 $backends = Get-Content -Raw -LiteralPath (Join-Path $configDirectory 'backends.json') | ConvertFrom-Json
 $runtimes = Get-Content -Raw -LiteralPath (Join-Path $configDirectory 'runtimes.json') | ConvertFrom-Json
@@ -76,9 +82,14 @@ foreach ($property in $models.PSObject.Properties) {
 Write-Host ''
 Write-Host '--- llama.cpp backends ---' -ForegroundColor Cyan
 foreach ($property in $backends.PSObject.Properties) {
+  # Keys starting with '_' are documentation, not backends.
+  if ($property.Name.StartsWith('_')) { continue }
   $backend = $property.Value
+  # A CUDA package on a Mac is not missing, it is irrelevant. Reporting it as a
+  # problem would make a healthy install look broken on both platforms.
+  if ($backend.platform -ne $platform) { continue }
   $folder = Join-Path (Join-Path $root 'tools') $backend.folder
-  $installed = Test-Path -LiteralPath (Join-Path $folder 'llama-server.exe')
+  $installed = Test-Path -LiteralPath (Join-Path $folder $serverExe)
 
   if (-not $installed) {
     if ($Full) {
@@ -106,7 +117,16 @@ foreach ($property in $backends.PSObject.Properties) {
 Write-Host ''
 Write-Host '--- Runtimes (Node and Pi) ---' -ForegroundColor Cyan
 Write-Host 'Thousands of small files: the part a USB copy is most likely to truncate.' -ForegroundColor DarkGray
-foreach ($property in $runtimes.PSObject.Properties) {
+$runtimeNames = @($runtimes.PSObject.Properties | Where-Object {
+  -not $_.Name.StartsWith('_') -and $_.Value.platform -eq $platform
+})
+if (-not $runtimeNames.Count) {
+  # These are vendored by hand into a Windows package so an offline machine can
+  # still run Pi. On macOS Pi is an npm install like any other, so there is
+  # nothing here to verify and nothing missing.
+  Write-Host "SKIPPED: no vendored runtimes are declared for $platform" -ForegroundColor DarkGray
+}
+foreach ($property in $runtimeNames) {
   $runtime = $property.Value
   $folder = Join-Path (Join-Path $root 'tools') $runtime.folder
   $entrypoint = Join-Path $folder $runtime.entrypoint

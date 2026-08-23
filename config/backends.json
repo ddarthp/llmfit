@@ -1,8 +1,11 @@
 {
+  "_comment": "Every backend declares the platform it runs on, and the launcher only offers the ones that match. Windows archives are zips that extract flat; the macOS archive is a tar.gz whose contents sit under a llama-b<build> directory, so it declares stripComponents to land flat like the others. The tree counts are what PowerShell's Get-ChildItem -Recurse -File reports, which on macOS includes the .dylib symlinks: counting them with find(1) instead gives 43 rather than 61 and would fail verification.",
   "cuda13": {
     "name": "NVIDIA CUDA 13.3 (GeForce RTX 20/30/40/50, Quadro, Tesla)",
+    "platform": "windows",
     "folder": "llama.cpp-cuda13",
     "gpuLayers": 999,
+    "speculativeDecoding": true,
     "tree": {
       "files": 56,
       "bytes": 702102125
@@ -22,8 +25,11 @@
   },
   "vulkan": {
     "name": "Vulkan (AMD, Intel and NVIDIA; recommended for APUs and integrated GPUs)",
+    "platform": "windows",
     "folder": "llama.cpp",
     "gpuLayers": 999,
+    "_speculativeComment": "Measured: the cost of maintaining the draft context cancels the gain.",
+    "speculativeDecoding": false,
     "tree": {
       "files": 53,
       "bytes": 101939997
@@ -38,8 +44,10 @@
   },
   "cpu": {
     "name": "CPU x64 (no acceleration; considerably slower)",
+    "platform": "windows",
     "folder": "llama.cpp-cpu",
     "gpuLayers": 0,
+    "speculativeDecoding": false,
     "tree": {
       "files": 52,
       "bytes": 47585565
@@ -49,6 +57,28 @@
         "file": "llama-cpu.zip",
         "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10566/llama-b10566-bin-win-cpu-x64.zip",
         "sha256": "594f822c829ea097e1f0528a2b5b9f9953dd00254b48c44438104ddfb87a1ab9"
+      }
+    ]
+  },
+  "metal": {
+    "_comment": "Apple Silicon only. There is no CPU-only sibling because there is nothing to gain from one: unified memory means the weights are already where the CPU can read them, so Metal is never the slower choice. Intel Macs would need the macos-x64 archive and are not supported.",
+    "name": "Apple Metal (M1-M4, unified memory)",
+    "platform": "macos",
+    "architecture": "arm64",
+    "folder": "llama.cpp-metal",
+    "gpuLayers": 999,
+    "_speculativeComment": "On, so the option exists, with the per-model blocks deciding who actually gets it. One measurement so far: Qwen 3.8 27B with vision on a 24 GiB M4 Pro at 32K gives draft acceptance 0.93, mean draft length 3.79, and generation unchanged at 10.6 tok/s against 10.7 without. The same configuration at 48K ran out of Metal memory during the first decode, after loading cleanly and reporting healthy - which is why that model's macos block carries a measured maxContext. See its mtp block in models.json for why a hybrid attention/SSM architecture cannot profit. The Gemma 4 family is pure sliding-window attention with a small companion draft file, an entirely different shape of bet, and is still untested here: it inherits its CUDA costMiB and has no verified ceiling, so treat the first run of one as an experiment.",
+    "speculativeDecoding": true,
+    "tree": {
+      "files": 61,
+      "bytes": 27555744
+    },
+    "archives": [
+      {
+        "file": "llama-metal.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10566/llama-b10566-bin-macos-arm64.tar.gz",
+        "sha256": "533f546dab2ce2f8e29ce3070f26acc55acc59528e177f2cd0d52b7f69b44f50",
+        "stripComponents": 1
       }
     ]
   }

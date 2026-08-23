@@ -1,0 +1,5 @@
+#!/bin/zsh
+# The global command on macOS, once INSTALL-PATH.command has run.
+# Its Windows sibling is bin/llmfit.cmd.
+source "${0:A:h:h}/lib/bootstrap.zsh"
+llmfit::run llmfit.ps1 "$@"
