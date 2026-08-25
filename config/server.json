@@ -29,6 +29,11 @@
     "q4_1": 0.625,
     "q4_0": 0.5625
   },
+  "_cacheTypeOptionsComment": "What the launcher offers in its KV cache menu, in the order it lists them. cacheType above is still the DEFAULT - pressing Enter reproduces exactly what the launcher did before this menu existed - and this array is only what you may switch to without editing a file. It is deliberately short: f16 is the type every measurement in this project was taken with, and q8_0 is the mildest quantized option at 1.0625 bytes per element, roughly halving the cache. The 4- and 5-bit types stay out because nobody here has run them long enough to recommend them, and the one measurement that exists (q4_1 on CUDA: 40 tok/s prompt against f16's 3355) is the reason. Add one if you want to measure it; every entry must also appear in cacheTypeBytes or the launcher stops before anything loads.",
+  "cacheTypeOptions": [
+    "f16",
+    "q8_0"
+  ],
   "_samplingComment": "Fallback for a model whose catalog entry declares no sampling block of its own. These are llama-server's own defaults, written out rather than inherited: a model nobody has looked up gets the same behaviour it would have got anyway, but visibly, and the value cannot shift under you when llama.cpp changes a default between releases. Every model shipped in models.json carries its publisher's real numbers instead.",
   "sampling": {
     "profile": "llamacpp-defaults",

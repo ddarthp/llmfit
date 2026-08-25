@@ -5,6 +5,8 @@
     "platform": "windows",
     "folder": "llama.cpp-cuda13",
     "gpuLayers": 999,
+    "_pinDeviceComment": "llama.cpp's default split mode is 'layer' over EVERY device the backend enumerates, so a machine with more than one card runs part of the model on a card nobody chose. It sizes that split with the 'free' figure from --list-devices, which is static: measured here, a Vulkan build reported 15227 MiB free on an RTX 5070 Ti while nvidia-smi reported 798, because a training job held the rest. Backends that enumerate hardware they do not own set this, and the launcher then pins one device and sends --split-mode none.",
+    "pinDevice": true,
     "speculativeDecoding": true,
     "tree": {
       "files": 56,
@@ -28,7 +30,9 @@
     "platform": "windows",
     "folder": "llama.cpp",
     "gpuLayers": 999,
-    "_speculativeComment": "Measured: the cost of maintaining the draft context cancels the gain.",
+    "_pinDeviceComment": "llama.cpp's default split mode is 'layer' over EVERY device the backend enumerates, so a machine with more than one card runs part of the model on a card nobody chose. It sizes that split with the 'free' figure from --list-devices, which is static: measured here, a Vulkan build reported 15227 MiB free on an RTX 5070 Ti while nvidia-smi reported 798, because a training job held the rest. Backends that enumerate hardware they do not own set this, and the launcher then pins one device and sends --split-mode none.",
+    "pinDevice": true,
+    "_speculativeComment": "Measured twice, and the second measurement is the stronger reason. Originally: the cost of maintaining the draft context cancels the gain. On b10566 it is worse than pointless - Gemma 4 E4B with its companion draft model aborts the process during KV allocation, 'pre-allocated tensor (cache_k_l22) in a buffer (Vulkan0) that cannot run the operation (NONE)', which is Gemma 4's shared-KV layers meeting a Vulkan buffer that has no kernel for them. Not measured on Qwen, whose MTP is embedded rather than a separate file and may well be a different story.",
     "speculativeDecoding": false,
     "tree": {
       "files": 53,
