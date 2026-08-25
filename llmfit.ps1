@@ -221,6 +221,27 @@ function Get-LiveFreeMiB {
   return $null
 }
 
+function Get-LiveFreeByName {
+  # Get-LiveFreeMiB answers 'how much is free on the busiest card', which is the
+  # right question with one card and the wrong one when the launcher is about to
+  # ask which of several to use. nvidia-smi will name them, and the name it
+  # prints is character for character the one --list-devices prints, so the two
+  # lists join on it. AMD and Intel ship no equivalent tool, and an integrated
+  # GPU needs none: its memory is system RAM, which Get-SystemRamMiB already has.
+  $map = @{}
+  try {
+    $raw = & nvidia-smi --query-gpu=name,memory.free --format=csv,noheader,nounits 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $raw) { return $map }
+    foreach ($line in @($raw)) {
+      $parts = "$line".Split(',')
+      if ($parts.Count -lt 2) { continue }
+      $free = 0.0
+      if ([double]::TryParse($parts[1].Trim(), [ref]$free)) { $map[$parts[0].Trim()] = $free }
+    }
+  } catch {}
+  return $map
+}
+
 function ConvertTo-ShellQuoted {
   # Single quotes are the only construct sh does not interpret anything inside,
   # so wrapping in them and closing-escaping-reopening around any embedded
@@ -249,15 +270,75 @@ function Get-PlatformSetting {
 }
 
 function Get-CacheType {
-  # The KV cache type is global by default and overridable per model, because
-  # what it costs is not a property of the launcher. Quantizing it was measured
-  # on CUDA to move attention off the GPU and collapse prompt processing from
-  # 3355 to 40 tokens per second, so a model that wants a quantized cache
-  # usually wants it on one platform and not the other.
+  # The DEFAULT KV cache type: global by default and overridable per model,
+  # because what it costs is not a property of the launcher. Quantizing it was
+  # measured on CUDA to move attention off the GPU and collapse prompt
+  # processing from 3355 to 40 tokens per second, so a model that wants a
+  # quantized cache usually wants it on one platform and not the other.
+  # Read-CacheType below turns this into the pre-selected entry of a menu; what
+  # actually loads is whatever comes back from there.
   param($Model, $ServerConfig, [string]$Platform)
   $type = Get-PlatformSetting -Block $Model.cache -Platform $Platform -Name 'type'
   if ($type) { return @{ Type = $type; Source = "config/models.json ($($Model.alias))" } }
   return @{ Type = $ServerConfig.cacheType; Source = 'config/server.json' }
+}
+
+function Get-CacheNote {
+  # One sentence per type, and it has to be platform-aware. The collapse a
+  # quantized KV cache causes was measured on CUDA, where flash attention has
+  # no kernel for one and silently moves attention to the CPU. It has not been
+  # measured on Metal, so it is not asserted there - saying "this will be slow"
+  # on a platform nobody tested would be inventing a measurement.
+  param([string]$Type)
+  if ($Type -like 'f*' -or $Type -like 'bf*') { return 'full precision, attention stays on the GPU' }
+  if ($onMacOS) { return 'QUANTIZED: costs prompt speed on CUDA; unmeasured on Metal' }
+  return 'QUANTIZED: attention falls back to the CPU on CUDA'
+}
+
+function Get-CacheColor {
+  param([string]$Type)
+  if ($Type -like 'f*' -or $Type -like 'bf*') { return 'Green' }
+  return 'Yellow'
+}
+
+function Read-CacheType {
+  # The KV type is asked, not assumed, and it is asked BEFORE the fit table
+  # because the fit table is sized with it: the same 27B at 32K is 2.0 GiB of
+  # cache in f16 and 1.1 in q8_0, and a table drawn with one number while the
+  # server loads the other describes a run nobody performed.
+  #
+  # config/server.json still decides what is pre-selected, so pressing Enter
+  # reproduces the behaviour this launcher had before the menu existed. What
+  # the menu adds is the ability to measure the trade yourself on your own
+  # hardware, which is the only way anyone is going to find out whether the
+  # CUDA collapse also exists on Metal.
+  param($ServerConfig, $Default)
+
+  $options = @($ServerConfig.cacheTypeOptions)
+  # No menu declared, or a default that is not in it: fall back rather than
+  # hide the type the catalog asked for behind a list that does not contain it.
+  if (-not $options -or $options.Count -eq 0) { return $Default }
+  if ($options -notcontains $Default.Type) { $options = @($Default.Type) + $options }
+
+  Write-Host '  KV cache type. The fit table below is sized with what you pick here.' -ForegroundColor DarkGray
+  $defaultIndex = 1
+  for ($i = 0; $i -lt $options.Count; $i++) {
+    $type = $options[$i]
+    $bytes = $ServerConfig.cacheTypeBytes[$type]
+    if (-not $bytes) {
+      throw "config/server.json offers '$type' in cacheTypeOptions but declares no cacheTypeBytes for it."
+    }
+    if ($type -eq $Default.Type) { $defaultIndex = $i + 1 }
+    Write-Host ("  {0,2}) {1,-5} {2,-7} bytes/element   " -f ($i + 1), $type, $bytes) -NoNewline
+    Write-Host (Get-CacheNote -Type $type) -ForegroundColor (Get-CacheColor -Type $type) -NoNewline
+    if ($type -eq $Default.Type) { Write-Host "   (default, from $($Default.Source))" -ForegroundColor DarkGray }
+    else { Write-Host '' }
+  }
+
+  $choice = Read-Choice -Prompt 'KV cache' -Maximum $options.Count -Default $defaultIndex
+  $picked = $options[$choice - 1]
+  $source = if ($picked -eq $Default.Type) { $Default.Source } else { 'your choice at launch' }
+  return @{ Type = $picked; Source = $source }
 }
 
 function Get-SystemRamMiB {
@@ -357,6 +438,10 @@ if ($onMacOS) {
 }
 Write-Host ''
 
+# Read once and use twice: in the backend list below, and again when a backend
+# that enumerates several devices asks which one to pin.
+$liveFree = Get-LiveFreeByName
+
 $options = @()
 foreach ($key in $backendKeys) {
   $backend = $backends[$key]
@@ -392,7 +477,16 @@ for ($i = 0; $i -lt $options.Count; $i++) {
     # not the size of the machine. On Windows it really is the card's total.
     $totalLabel = if ($onMacOS) { 'recommended' } else { 'total' }
     foreach ($device in $option.Devices) {
-      Write-Host ("       {0,-8} {1,-28} {2,10} {3}, {4,10} usable" -f $device.Id, $device.Name, (Format-MiB $device.TotalMiB), $totalLabel, (Format-MiB ($device.TotalMiB - $deviceReserveMiB))) -ForegroundColor DarkGray
+      Write-Host ("       {0,-8} {1,-28} {2,10} {3}, {4,10} usable" -f $device.Id, $device.Name, (Format-MiB $device.TotalMiB), $totalLabel, (Format-MiB ($device.TotalMiB - $deviceReserveMiB))) -NoNewline -ForegroundColor DarkGray
+      # The 'free' in the line above came from --list-devices and is static: it
+      # reports the same figure on an idle card and on one with 15 GB in use.
+      # Where a live reading exists, say so here rather than let someone pick a
+      # device on a number that was never true.
+      if ($liveFree.ContainsKey($device.Name)) {
+        Write-Host (", {0} free now" -f (Format-MiB $liveFree[$device.Name])) -ForegroundColor $(if ($liveFree[$device.Name] -lt ($device.TotalMiB / 2)) { 'Yellow' } else { 'DarkGray' })
+      } else {
+        Write-Host ''
+      }
     }
   } elseif ($option.Key -eq 'cpu') {
     Write-Host ("       no GPU: uses system RAM, {0} nominally free" -f (Format-MiB $systemRamMiB)) -ForegroundColor DarkGray
@@ -410,12 +504,53 @@ if (-not $selected.Devices.Count -and $backendKey -ne 'cpu') {
   $selected.Devices = @(Get-BackendDevices -Folder $backend.folder)
   if ($selected.Devices.Count) { $selected.BudgetMiB = ($selected.Devices | Measure-Object -Property TotalMiB -Maximum).Maximum - $deviceReserveMiB }
 }
+# --------------------------------------------------------------- 1b. DEVICE
+
+# A backend enumerates every device its API can reach, and llama.cpp's default
+# split mode is 'layer' across all of them. On a machine with an APU and a
+# discrete card that puts part of the model on a card nobody chose - sized with
+# the static 'free' from --list-devices. Measured here: a Vulkan build reported
+# 15227 MiB free on an RTX 5070 Ti while nvidia-smi reported 798, because a
+# training job held the rest. Pinning is also what makes the fit table honest,
+# since it is computed against ONE device's memory and so one device has to run
+# it. Backends declare whether they need this; see config/backends.json.
+$deviceId = $null
+$chosenDevice = $null
+if ($backend.pinDevice -and $selected.Devices.Count) {
+  $ranked = @($selected.Devices | Sort-Object TotalMiB -Descending)
+  $deviceChoice = 1
+  if ($ranked.Count -gt 1) {
+    Write-Host ''
+    Write-Host '  This backend can see more than one device, and llama.cpp would spread the' -ForegroundColor DarkGray
+    Write-Host '  model over all of them. Pick the one that should carry it.' -ForegroundColor DarkGray
+    for ($i = 0; $i -lt $ranked.Count; $i++) {
+      $device = $ranked[$i]
+      $mark = if ($i -eq 0) { ' [recommended]' } else { '' }
+      Write-Host ("  {0,2}) {1,-8} {2,-28} {3,10} total{4}" -f ($i + 1), $device.Id, $device.Name, (Format-MiB $device.TotalMiB), $mark)
+      if ($liveFree.ContainsKey($device.Name)) {
+        Write-Host ("       {0} free right now against the {1} this backend reports" -f (Format-MiB $liveFree[$device.Name]), (Format-MiB $device.FreeMiB)) -ForegroundColor $(if ($liveFree[$device.Name] -lt ($device.TotalMiB / 2)) { 'Yellow' } else { 'DarkGray' })
+      }
+    }
+    $deviceChoice = Read-Choice -Prompt 'Device' -Maximum $ranked.Count -Default 1
+  }
+  $chosenDevice = $ranked[$deviceChoice - 1]
+  $deviceId = $chosenDevice.Id
+  $selected.BudgetMiB = $chosenDevice.TotalMiB - $deviceReserveMiB
+}
+
 $budgetMiB = $selected.BudgetMiB
 $budgetSource = if ($onMacOS) { 'what macOS recommends one process keep resident' }
                 else { 'total minus driver reserve' }
-$best = if ($selected.Devices.Count) { $selected.Devices | Sort-Object TotalMiB -Descending | Select-Object -First 1 } else { $null }
+# With a device pinned the budget belongs to THAT device. Without one the model
+# is spread over everything, and the largest card is the closest thing to a
+# single number for a split this launcher does not control.
+$best = if ($chosenDevice) { $chosenDevice }
+        elseif ($selected.Devices.Count) { $selected.Devices | Sort-Object TotalMiB -Descending | Select-Object -First 1 }
+        else { $null }
 if ($best -and $best.Name -match 'NVIDIA') {
-  $live = Get-LiveFreeMiB
+  # Prefer the reading for THIS card; Get-LiveFreeMiB reports the emptiest one,
+  # which is the wrong card as soon as there is more than one.
+  $live = if ($liveFree.ContainsKey($best.Name)) { $liveFree[$best.Name] } else { Get-LiveFreeMiB }
   # Only trust the live figure when it is lower: it means something else is on
   # the card and we would otherwise overcommit.
   if ($null -ne $live -and $live -lt $budgetMiB) {
@@ -481,25 +616,21 @@ $visionMiB = if ($useVision) { Get-FileMiB (Join-Path $modelsDirectory $model.mm
 
 # -------------------------------------------------------------- 3. CONTEXT
 
-Write-Step 3 'CONTEXT'
-$cacheChoice = Get-CacheType -Model $model -ServerConfig $serverConfig -Platform $platform
+Write-Step 3 'KV CACHE AND CONTEXT'
+$cacheDefault = Get-CacheType -Model $model -ServerConfig $serverConfig -Platform $platform
+$cacheChoice = Read-CacheType -ServerConfig $serverConfig -Default $cacheDefault
 $cacheType = $cacheChoice.Type
 $cacheBytes = [double]$serverConfig.cacheTypeBytes[$cacheType]
 if (-not $cacheBytes) {
   throw "Unknown KV cache type '$cacheType' from $($cacheChoice.Source). Declared types: $(@($serverConfig.cacheTypeBytes.Keys) -join ', ')"
 }
-# The collapse a quantized KV cache causes was measured on CUDA, where flash
-# attention has no kernel for one and silently moves attention to the CPU. It
-# has not been measured on Metal, so it is not asserted there.
-$cacheNote = if ($cacheType -like 'f*' -or $cacheType -like 'bf*') {
-  'full precision, attention stays on the GPU'
-} elseif ($onMacOS) {
-  'QUANTIZED: costs prompt speed on CUDA; unmeasured on Metal'
-} else {
-  'QUANTIZED: attention falls back to the CPU on CUDA'
-}
-Write-Host "  KV cache in $cacheType, $cacheBytes bytes per element ($cacheNote)." -ForegroundColor DarkGray
-if ($cacheChoice.Source -ne 'config/server.json') {
+Write-Host ''
+Write-Host "  KV cache in $cacheType, $cacheBytes bytes per element ($(Get-CacheNote -Type $cacheType))." -ForegroundColor DarkGray
+if ($cacheChoice.Source -eq 'your choice at launch') {
+  # Say what you overrode. Picking a type once and forgetting the catalog
+  # recommended another one is how a slow run gets blamed on the model.
+  Write-Host "  You picked that. The default here is $($cacheDefault.Type), from $($cacheDefault.Source)." -ForegroundColor DarkGray
+} elseif ($cacheChoice.Source -ne 'config/server.json') {
   Write-Host "  That type is set for this model in $($cacheChoice.Source), not globally." -ForegroundColor DarkGray
 }
 Write-Host "  $($model.geometry.summary)." -ForegroundColor DarkGray
@@ -687,7 +818,12 @@ if ($runningIds.Count) {
 }
 
 $serveScript = Join-Path $root 'serve.ps1'
-$serveArguments = @('-ModelKey', $modelKey, '-Backend', $backendKey, '-Context', "$contextSize")
+# -CacheType is sent explicitly rather than left for serve.ps1 to resolve on its
+# own. It would resolve the same default, but the fit table above was sized with
+# whatever the menu returned, and a server that loads a different type turns that
+# table into a description of a run nobody performed.
+$serveArguments = @('-ModelKey', $modelKey, '-Backend', $backendKey, '-Context', "$contextSize", '-CacheType', $cacheType)
+if ($deviceId) { $serveArguments += @('-Device', $deviceId) }
 if ($useVision) { $serveArguments += '-Vision' }
 if ($useMtp) { $serveArguments += '-Mtp' }
 

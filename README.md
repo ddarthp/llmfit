@@ -99,13 +99,15 @@ Enter accepts the highlighted option in each step.
 
 ```
 1) NVIDIA CUDA 13.3                                     [recommended]
-     CUDA0    NVIDIA GeForce RTX 5070 Ti   15.9 GiB total,  15.6 GiB usable
+     CUDA0    NVIDIA GeForce RTX 5070 Ti   15.9 GiB total,  15.6 GiB usable, 798 MiB free now
 2) Vulkan
      Vulkan0  AMD Radeon 780M Graphics     47.6 GiB total,  47.3 GiB usable
-     Vulkan1  NVIDIA GeForce RTX 5070 Ti   15.6 GiB total,  15.3 GiB usable
+     Vulkan1  NVIDIA GeForce RTX 5070 Ti   15.6 GiB total,  15.3 GiB usable, 798 MiB free now
 3) CPU x64
      no GPU: uses system RAM
 ```
+
+**free now** appears only where a live reading exists, which today means `nvidia-smi`. It is printed in yellow when it has fallen below half the card, because that is the case the rest of the menu cannot see: the machine above has a training job holding the 5070 Ti, and every other number on its line was measured on an idle card that no longer exists.
 
 On macOS there is one entry, because there is one answer:
 
@@ -126,9 +128,32 @@ On **macOS**, `total` is already `recommendedMaxWorkingSetSize` — what macOS i
 
 There is no separate pool of video memory on Apple Silicon. The weights, the KV cache and everything the OS is doing come out of the same RAM, which is why the menu prints the machine's total above the budget.
 
-> The `free` value reported by `llama-server --list-devices` is deliberately *not* used: it is static. It returns the same number with an empty GPU and with 15 GB in use. Only `total` is trustworthy.
+> The `free` value reported by `llama-server --list-devices` is deliberately *not* used as a budget: it is static. It returns the same number with an empty GPU and with 15 GB in use. Measured on the machine above, the Vulkan build reported **15227 MiB free** on the 5070 Ti while `nvidia-smi` reported **798**, because a training job held the rest. Only `total` is trustworthy.
 
 > Metal also reports `BLAS: Accelerate (0 MiB, 0 MiB free)`, which matches the device pattern exactly but is a compute library, not memory you can spend. Anything reporting no memory is dropped rather than listed as a GPU with none.
+
+#### Which device runs it
+
+A backend enumerates every device its API can reach, and `llama.cpp`'s default split mode is `layer` **across all of them**. On the machine above, choosing Vulkan without saying more puts part of the model on the 780M and part on the 5070 Ti — and sizes that split with the static `free` above, which says the busy card has 15 GB going spare.
+
+So when a backend that declares `pinDevice` sees more than one device, there is a step:
+
+```
+  This backend can see more than one device, and llama.cpp would spread the
+  model over all of them. Pick the one that should carry it.
+
+1) Vulkan0  AMD Radeon 780M Graphics     47.6 GiB total [recommended]
+2) Vulkan1  NVIDIA GeForce RTX 5070 Ti   15.6 GiB total
+     798 MiB free right now against the 15.3 GiB this backend reports
+
+  Device [1]:
+```
+
+The choice is sent on as `--device <id> --split-mode none`, and the fit table in step 3 is computed against **that** device's memory rather than against the largest one on the machine. Those two have to agree: a table sized for one card describing a run spread over two is a table that measured nothing.
+
+`cuda13` and `vulkan` declare `pinDevice`. `cpu` has no devices, and `metal` has exactly one, so neither does — nothing changes on macOS.
+
+> An integrated GPU is not a small discrete one. The 780M reads 47.6 GiB because on an APU that memory *is* system RAM, and there is no PCIe crossing and no dedicated pool to overflow. What it does not have is bandwidth of its own: it shares the machine's DDR5 with the CPU. Prompt processing, which is compute-bound, gets the full benefit. Token generation, which is bandwidth-bound, gets much less. See [Reference measurements](#reference-measurements).
 
 ### 2. Model
 
@@ -149,12 +174,23 @@ Every model in the catalog, each with vision on and off:
 
 Turning vision off skips the `mmproj` file. That saves its weight — between 175 MB and 1.2 GB depending on the model — plus the encoder's compute buffers, which are measured per model and listed under [reference measurements](#reference-measurements).
 
-### 3. Context
+### 3. KV cache and context
 
-The table is computed for the model and vision setting you just chose, against the budget of the device you picked. Here is the tightest case — the 27B without vision on a 16 GB card:
+Two questions, in that order, because the answer to the first sizes the table for the second.
 
 ```
-KV cache in f16 (2 bytes per element).
+KV cache type. The fit table below is sized with what you pick here.
+ 1) f16   2       bytes/element   full precision, attention stays on the GPU   (default, from config/server.json)
+ 2) q8_0  1.0625  bytes/element   QUANTIZED: attention falls back to the CPU on CUDA
+KV cache [1]:
+```
+
+Pressing Enter takes the default, which is whatever the catalog resolves for this model on this platform — so the launcher behaves exactly as it did before this menu existed. The list itself is `cacheTypeOptions` in `config/server.json`. Read the next section before picking option 2: on CUDA it was measured, and it is a bad trade.
+
+Then the table, computed for the model and vision setting you just chose, against the budget of the device you picked. Here is the tightest case — the 27B without vision on a 16 GB card:
+
+```
+KV cache in f16, 2 bytes per element (full precision, attention stays on the GPU).
 hybrid attention/SSM: 16 of 65 layers hold a KV cache.
 
 1)   32K   KV  2.0 GiB   estimated total  13.9 GiB   TIGHT
@@ -166,6 +202,8 @@ hybrid attention/SSM: 16 of 65 layers hold a KV cache.
 ```
 
 That is what a 27B costs on 16 GB: 32K and nothing more. The Gemma 4 12B on the same card reports `FITS` at every length, 256K included, at 10.9 GiB.
+
+Pick `q8_0` at the prompt above and the KV column halves — 1.1 GiB at 32K, 2.1 at 64K — which is exactly what makes the option tempting and exactly why the warning is next to it.
 
 The shorter options exist because context is the cheapest thing to give up. Halving it frees real memory and keeps the model on the GPU, which quantizing the cache does not.
 
@@ -190,7 +228,7 @@ Assuming every layer scales overestimates the cache by 4× or more and rules out
 
 #### KV quantization costs you the GPU
 
-The default is `f16`, and quantizing the KV cache is **not** the free context win it looks like. Measured on this build, same model, same prompt, same card:
+The launcher lets you pick the type, and the default is `f16`. Quantizing the KV cache is **not** the free context win it looks like. Measured on this build, same model, same prompt, same card:
 
 | `cacheType` | VRAM | Prompt processing | Generation |
 | --- | --- | --- | --- |
@@ -208,6 +246,10 @@ If you need the context badly enough to pay that, the types are there:
 | `q5_1` | 0.75 | 768 MiB |
 | `q4_1` | 0.625 | 640 MiB |
 | `q4_0` | 0.5625 | 576 MiB |
+
+The launcher's menu offers only `f16` and `q8_0`, because those are the two worth putting in front of somebody: full precision, and the mildest quantization at roughly half the cache. The rest are reachable by adding them to `cacheTypeOptions` in `config/server.json` — every type listed there must also appear in `cacheTypeBytes`, or the launcher stops before anything loads.
+
+**If you do quantize, measure it.** The 84× figure above is a CUDA measurement and it is the only one anybody here has taken; Metal has never been checked. Run your workload once with each type and compare the `prompt eval time` and `eval time` lines `llama-server` prints — that is the whole point of the type being a prompt instead of a constant. If prompt processing collapses, you found the same hole on your platform.
 
 Prefer a shorter context over a quantized cache. The fit table offers 32K, 48K and 56K precisely so you can trade context for memory without leaving the GPU.
 
@@ -273,7 +315,7 @@ On Windows the PATH installer adds `bin\`, `tools\node` and Pi to the user `PATH
 | Script | Flags | Purpose |
 | --- | --- | --- |
 | `llmfit.ps1` | `-Help` | The launcher itself |
-| `serve.ps1` | `-ModelKey` `-Backend` `-Context` `-Vision` `-Mtp` | Starts `llama-server` directly, no menus |
+| `serve.ps1` | `-ModelKey` `-Backend` `-Context` `-CacheType` `-Device` `-Vision` `-Mtp` | Starts `llama-server` directly, no menus |
 | `verify.ps1` | `-Full` | Integrity check. `-Full` requires the whole catalog |
 | `clean.ps1` | `-IncludeLogs` `-Force` | Reclaim disk. `-Force` skips the confirmation |
 | `install-path.ps1` | — | `PATH` setup |
@@ -283,6 +325,9 @@ Useful invocations, Windows:
 ```powershell
 # Start a specific configuration with no menus
 powershell -ExecutionPolicy Bypass -File serve.ps1 -ModelKey qwen35-9b -Backend cuda13 -Context 131072 -Vision
+
+# Keep the whole model on the integrated GPU and leave the discrete card alone
+powershell -ExecutionPolicy Bypass -File serve.ps1 -ModelKey gemma4-e4b -Backend vulkan -Context 49152 -Device Vulkan0
 
 # Require the entire catalog before copying to a USB stick
 powershell -ExecutionPolicy Bypass -File verify.ps1 -Full
@@ -361,7 +406,17 @@ All of them are Unsloth quantizations with an optional vision encoder. **KV figu
 
 ### A model can pick its own KV cache type
 
-`cacheType` in `config/server.json` is the default for everything. A model may override it, optionally per platform, when the type is what decides whether a context is reachable at all:
+Three layers, and the last one wins:
+
+| Layer | Where | What it decides |
+| --- | --- | --- |
+| Global | `cacheType` in `config/server.json` | The default for every model |
+| Per model | a `cache` block in `config/models.json`, optionally per platform | The default for that model |
+| Per run | the launcher's KV cache prompt | What actually loads |
+
+The first two only ever set what is **pre-selected** in the menu. Pressing Enter accepts it, so a catalog that never mentions the launcher still gets exactly the type it asked for.
+
+A model overrides the global default when the type is what decides whether a context is reachable at all:
 
 ```json
 "cache": {
@@ -372,7 +427,7 @@ All of them are Unsloth quantizations with an optional vision encoder. **KV figu
 
 The 35B-A3B is the only entry that does this, and the two halves have different reasons. Its weights are 15.7 GiB before the encoder's 858 MiB, so on a 24 GiB Mac — where Metal recommends 17.8 GiB — `f16` leaves no room for a cache at any length, while `q8_0` halves it and brings 32K and 48K within reach. On Windows it stays `f16` deliberately: quantizing the cache on CUDA was measured on this build at 40 tok/s prompt processing against 3355, because CUDA flash attention has no quantized-KV kernel and attention silently moves to the CPU. **A card big enough for this model is a card big enough for an `f16` cache.**
 
-`q8_0` on Metal is **not measured**. The collapse above is a CUDA finding; whether Metal has the same hole nobody here has checked. Run it once each way and compare tokens per second before trusting it.
+`q8_0` on Metal is **not measured**. The collapse above is a CUDA finding; whether Metal has the same hole nobody here has checked. Run it once each way and compare tokens per second before trusting it — the KV cache prompt exists so that takes two runs rather than an edit to a config file.
 
 Two things worth reading off that table:
 
@@ -390,7 +445,7 @@ Everything tunable lives in `config/`. No values are hardcoded in the scripts.
 | --- | --- |
 | `config/models.json` | Catalog: alias, URL, SHA-256, geometry read from the GGUF header, and the publisher's sampling profiles |
 | `config/backends.json` | Backends: platform, URL, SHA-256, extracted file counts, whether MTP pays off |
-| `config/server.json` | Host, port, KV type, per-platform budget constants, overheads, context options, provider names |
+| `config/server.json` | Host, port, default KV type and the types the launcher offers, per-platform budget constants, overheads, context options, provider names |
 | `config/runtimes.json` | Node and Pi, vendored into a Windows package: path, entrypoint, file counts |
 | `config/bootstrap.json` | The PowerShell the macOS entry points fetch. Read by `zsh` with `jq` before any PowerShell exists |
 
@@ -627,6 +682,39 @@ Overhead constants per model, all measured:
 | Gemma 4 26B-A4B | +313 MiB | +142 MiB | +292 MiB, estimated |
 
 A negative base means part of the file never reaches VRAM: metadata and tokenizer tables are counted in the file size, and for the 27B so are the `blk.64` tensors llama.cpp skips when MTP is off. A model with no measured values falls back to the defaults in `config/server.json`, which stay deliberately pessimistic.
+
+### The same models on an integrated GPU
+
+Everything above is CUDA. The figures below are an AMD Radeon 780M — the integrated GPU of a Ryzen APU, sharing 64 GB of DDR5 with the CPU — reached through the Vulkan backend with the device pinned. They are `llama-bench` with `-r 1` and `-fa on`, so treat them as one measurement each rather than as the calibration the CUDA numbers above received.
+
+| Model | File | Params | pp512 | tg128 |
+| --- | --- | --- | --- | --- |
+| Gemma 4 E4B | 3.91 GiB | 7.46 B | **449.70 tok/s** | 13.96 tok/s |
+| Gemma 4 12B | 6.24 GiB | 11.91 B | 166.27 tok/s | 6.77 tok/s |
+| Gemma 4 26B-A4B | 13.26 GiB | 25.23 B | 297.05 tok/s | **17.01 tok/s** |
+
+**The smallest model is not the fastest one to generate with.** The 26B-A4B is a mixture of experts: 25 B parameters in the file, roughly 4 B of them touched per token. Generation is bandwidth-bound, so what it costs is the bytes read per token, not the size of the file — and on an APU the GPU has no bandwidth of its own to hide that with. The 12 B is the slowest of the three because it is dense: every one of its 11.91 B parameters is read for every token.
+
+Prompt processing is the other way round, because it is compute-bound and batched. There the E4B wins by a wide margin, and the same E4B run on the CPU-only build of the identical release measures **98.06 tok/s pp512 and 10.74 tok/s tg64** — which is what "Vulkan is working" looks like from the outside: 4.6x the prompt throughput and 1.3x the generation.
+
+Context depth hits the two halves very differently. E4B again, same device:
+
+| Depth | pp512 | tg128 |
+| --- | --- | --- |
+| 0 | 449.70 tok/s | 13.96 tok/s |
+| 8192 | 136.98 tok/s | 13.79 tok/s |
+| 32768 | 59.92 tok/s | 11.05 tok/s |
+
+Generation barely moves across 32K, which is sliding-window attention doing exactly what the catalog says it does: 35 of the 42 layers are capped at a 512-token window and never see the context grow. Prompt processing falls to a seventh, because the 7 full-attention layers are quadratic and there is no window to save them.
+
+Loaded through `serve.ps1` at 48K with the device pinned, both models keep the discrete card at **0 MiB**:
+
+| Configuration | On the iGPU | Prompt, 5125 tokens | Generation |
+| --- | --- | --- | --- |
+| E4B no vision, 48K | 5463 MiB | 233.11 tok/s | 15.97 tok/s |
+| 26B-A4B no vision, 48K | 15519 MiB | 206.19 tok/s | 17.14 tok/s |
+
+> **Speculative decoding is not merely pointless on Vulkan, it aborts.** Gemma 4 E4B with its companion draft model dies during KV allocation: `pre-allocated tensor (cache_k_l22) in a buffer (Vulkan0) that cannot run the operation (NONE)`. That is Gemma 4's shared-KV layers meeting a Vulkan buffer with no kernel for them. The launcher never offers it, because `vulkan` sets `speculativeDecoding: false`; `serve.ps1` now refuses it too, rather than letting a hand-written command reach the abort.
 
 **MTP is charged what it actually costs**, and the two shapes are an order of magnitude apart. An embedded draft context is built against the whole model — 1200 MiB on the 27B — while a companion draft file costs little more than its own weight. Counting it as free is how a configuration reports `FITS` and then spills into system RAM, where prompt processing collapses from hundreds of tokens per second to tens.
 

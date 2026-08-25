@@ -2,6 +2,8 @@ param(
   [Parameter(Mandatory = $true)][string]$ModelKey,
   [Parameter(Mandatory = $true)][string]$Backend,
   [int]$Context = 0,
+  [string]$Device = '',
+  [string]$CacheType = '',
   [switch]$Vision,
   [switch]$Mtp
 )
@@ -38,6 +40,15 @@ if ($Context -gt $model.geometry.maxContext) {
 }
 if ($Mtp -and -not $model.mtp) {
   throw "$($model.name) ships no MTP layers: speculative decoding cannot be enabled."
+}
+# The launcher never offers MTP on a backend whose speculativeDecoding is false,
+# so only a hand-written command reaches this. It has to stop here: measured on
+# b10566, Gemma 4's draft model on Vulkan does not run slowly, it aborts the
+# process inside ggml-backend.cpp with 'pre-allocated tensor (cache_k_l22) in a
+# buffer (Vulkan0) that cannot run the operation'. A thrown message beats a
+# stack trace from a crash the catalog already knew was coming.
+if ($Mtp -and -not $selectedBackend.speculativeDecoding) {
+  throw "Speculative decoding is not available on the $Backend backend. config/backends.json sets speculativeDecoding false there, and the comment beside it says why."
 }
 
 $server = Join-Path (Join-Path $root 'tools') (Join-Path $selectedBackend.folder $serverExe)
@@ -82,9 +93,11 @@ function Get-SamplingProfile {
 
 function Get-CacheType {
   # Mirrors Get-CacheType in llmfit.ps1: the KV cache type is global by default
-  # and a model may override it, optionally per platform. The launcher sizes the
-  # fit table with this and the server has to load with the same value, or the
-  # table was describing a configuration nobody ran.
+  # and a model may override it, optionally per platform. This is now only the
+  # fallback for a hand-written serve.ps1 command. The launcher asks for the
+  # type, sizes its fit table with the answer and sends it on as -CacheType,
+  # because a server that loads a different type than the table was drawn with
+  # turns that table into a description of a configuration nobody ran.
   param($Model, $ServerConfig, [string]$Platform)
   $block = $Model.cache
   if ($block) {
@@ -96,18 +109,20 @@ function Get-CacheType {
 }
 
 $sampling = Get-SamplingProfile -Model $model -ServerConfig $serverConfig
-$cacheType = Get-CacheType -Model $model -ServerConfig $serverConfig -Platform $platform
+$cacheType = if ($CacheType) { $CacheType } else { Get-CacheType -Model $model -ServerConfig $serverConfig -Platform $platform }
+$cacheSource = if ($CacheType) { 'passed in' } else { 'resolved from config' }
 if (-not $serverConfig.cacheTypeBytes.$cacheType) {
-  throw "KV cache type '$cacheType' is not declared in config/server.json cacheTypeBytes."
+  throw "KV cache type '$cacheType' is not declared in config/server.json cacheTypeBytes. Declared types: $(@($serverConfig.cacheTypeBytes.PSObject.Properties.Name) -join ', ')."
 }
 
 Write-Host ''
 Write-Host "  Model    : $($model.name)  [$($model.alias)]" -ForegroundColor Cyan
 Write-Host "  Backend  : $($selectedBackend.name)" -ForegroundColor Cyan
+Write-Host "  Device   : $(if ($Device) { "$Device (pinned, split-mode none)" } else { 'every device the backend enumerates (llama.cpp default split)' })" -ForegroundColor Cyan
 Write-Host "  Context  : $($Context / 1024)K tokens" -ForegroundColor Cyan
 Write-Host "  Vision   : $(if ($Vision) { 'on (mmproj F16)' } else { 'off' })" -ForegroundColor Cyan
 Write-Host "  MTP      : $(if ($Mtp) { if ($mtpPath) { "on (draft model: $($model.mtp.file))" } else { 'on (embedded draft layers)' } } else { 'off' })" -ForegroundColor Cyan
-Write-Host "  KV cache : $cacheType" -ForegroundColor Cyan
+Write-Host "  KV cache : $cacheType  ($cacheSource)" -ForegroundColor Cyan
 Write-Host "  Sampling : $($sampling.Name)  [$($sampling.Source)]" -ForegroundColor Cyan
 Write-Host ("             temp $($sampling.Values.temperature)  top-p $($sampling.Values.topP)  top-k $($sampling.Values.topK)  min-p $($sampling.Values.minP)  presence $($sampling.Values.presencePenalty)  repeat $($sampling.Values.repeatPenalty)") -ForegroundColor DarkGray
 Write-Host "  API      : http://$($serverConfig.host):$($serverConfig.port)/v1" -ForegroundColor Cyan
@@ -137,6 +152,11 @@ $arguments = @(
   '--host', $serverConfig.host
   '--port', $serverConfig.port
 )
+# Without this llama.cpp splits the model over every device it enumerated, and
+# sizes the split with a 'free' figure that never asked the driver what is in
+# use. The launcher picked one device and budgeted the fit table against it; not
+# sending that choice on would make the table describe a run nobody performed.
+if ($Device) { $arguments += @('--device', $Device, '--split-mode', 'none') }
 if ($Vision) {
   $arguments += @('--mmproj', $mmprojPath)
   # Raising the encoder's minimum resolution is model specific: Qwen's encoder
