@@ -46,12 +46,20 @@
   "_overheadComment": "Fallback for models that carry no measured overhead block of their own. Calibrated against nvidia-smi on a 16 GB GPU with the 27B model: predicts real usage to within 15 MiB on CUDA.",
   "computeOverheadMiB": 256,
   "visionOverheadMiB": 448,
+  "_contextOptionsComment": "The ladder the launcher offers, and its spacing is deliberate rather than round. KV cost is linear in context, so a rung's distance from the one below it IS its price in VRAM: at f16 the 27B model spends 512 MiB per 8K of context, so the old 64K -> 128K jump asked for 4 GiB in a single step and a card that could hold 96K was told to settle for 64K. The rungs are therefore close together where consumer cards actually run out - 8K apart to 80K, 16K to 128K - and widen to 32K above that, where a machine that reached 128K has room to spare and the next rung being coarse costs it nothing. Every entry above a model's geometry.maxContext is filtered out before the menu is drawn, so listing 256K here does not offer it on a model that cannot reach it.",
   "contextOptions": [
     32768,
     49152,
     57344,
     65536,
+    73728,
+    81920,
+    98304,
+    114688,
     131072,
+    163840,
+    196608,
+    229376,
     262144
   ],
   "harness": {
