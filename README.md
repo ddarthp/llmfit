@@ -193,19 +193,28 @@ Then the table, computed for the model and vision setting you just chose, agains
 KV cache in f16, 2 bytes per element (full precision, attention stays on the GPU).
 hybrid attention/SSM: 16 of 65 layers hold a KV cache.
 
-1)   32K   KV  2.0 GiB   estimated total  13.9 GiB   TIGHT
-2)   48K   KV  3.0 GiB   estimated total  14.9 GiB   TOO BIG
-3)   56K   KV  3.5 GiB   estimated total  15.4 GiB   TOO BIG
-4)   64K   KV  4.0 GiB   estimated total  15.9 GiB   TOO BIG
-5)  128K   KV  8.0 GiB   estimated total  19.9 GiB   TOO BIG
-6)  256K   KV 16.0 GiB   estimated total  27.9 GiB   TOO BIG
+ 1)   32K   KV  2.0 GiB   estimated total  13.9 GiB   TIGHT
+ 2)   48K   KV  3.0 GiB   estimated total  14.9 GiB   TOO BIG
+ 3)   56K   KV  3.5 GiB   estimated total  15.4 GiB   TOO BIG
+ 4)   64K   KV  4.0 GiB   estimated total  15.9 GiB   TOO BIG
+ 5)   72K   KV  4.5 GiB   estimated total  16.4 GiB   TOO BIG
+ 6)   80K   KV  5.0 GiB   estimated total  16.9 GiB   TOO BIG
+ 7)   96K   KV  6.0 GiB   estimated total  17.9 GiB   TOO BIG
+ 8)  112K   KV  7.0 GiB   estimated total  18.9 GiB   TOO BIG
+ 9)  128K   KV  8.0 GiB   estimated total  19.9 GiB   TOO BIG
+10)  160K   KV 10.0 GiB   estimated total  21.9 GiB   TOO BIG
+11)  192K   KV 12.0 GiB   estimated total  23.9 GiB   TOO BIG
+12)  224K   KV 14.0 GiB   estimated total  25.9 GiB   TOO BIG
+13)  256K   KV 16.0 GiB   estimated total  27.9 GiB   TOO BIG
 ```
 
 That is what a 27B costs on 16 GB: 32K and nothing more. The Gemma 4 12B on the same card reports `FITS` at every length, 256K included, at 10.9 GiB.
 
+The rungs are close together at the bottom and widen at the top, and that column is the reason. KV cost is linear in context, so the gap between two rungs *is* what stepping up costs you: on this model, 8K of context is 512 MiB of VRAM. A ladder that went 64K then straight to 128K was asking for 4 GiB in one step, so a card with room for 96K got offered 64K and nothing in between. Below 128K the steps are 8K and 16K, where consumer cards actually run out; above it they widen to 32K, because a machine that reached 128K has headroom and a coarse rung costs it nothing.
+
 Pick `q8_0` at the prompt above and the KV column halves — 1.1 GiB at 32K, 2.1 at 64K — which is exactly what makes the option tempting and exactly why the warning is next to it.
 
-The shorter options exist because context is the cheapest thing to give up. Halving it frees real memory and keeps the model on the GPU, which quantizing the cache does not.
+The shorter options exist because context is the cheapest thing to give up. Halving it frees real memory and keeps the model on the GPU, which quantizing the cache does not. The list is `contextOptions` in `config/server.json`, and every rung above a model's `maxContext` is dropped before the table is drawn — the Gemma 4 E4B stops at 128K, so it never sees the last four.
 
 **This is the part most tools get wrong.** Not every layer's cache grows with context, and modern architectures lean on that hard.
 
@@ -251,7 +260,7 @@ The launcher's menu offers only `f16` and `q8_0`, because those are the two wort
 
 **If you do quantize, measure it.** The 84× figure above is a CUDA measurement and it is the only one anybody here has taken; Metal has never been checked. Run your workload once with each type and compare the `prompt eval time` and `eval time` lines `llama-server` prints — that is the whole point of the type being a prompt instead of a constant. If prompt processing collapses, you found the same hole on your platform.
 
-Prefer a shorter context over a quantized cache. The fit table offers 32K, 48K and 56K precisely so you can trade context for memory without leaving the GPU.
+Prefer a shorter context over a quantized cache. The fit table offers 32K, 48K, 56K and 72K through 112K precisely so you can trade context for memory without leaving the GPU.
 
 ### 4. Speculative decoding (MTP)
 

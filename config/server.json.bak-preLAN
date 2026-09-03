@@ -1,5 +1,5 @@
 {
-  "host": "0.0.0.0",
+  "host": "127.0.0.1",
   "port": 8080,
   "_platformsComment": "What --list-devices reports as 'total' does not mean the same thing on both platforms, so the constants that turn it into a budget cannot be shared. On Windows it is the raw dedicated VRAM of the card, with nothing held back. On Metal it is already recommendedMaxWorkingSetSize, the figure macOS itself recommends a process stay under.",
   "platforms": {
