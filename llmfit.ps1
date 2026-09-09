@@ -592,13 +592,18 @@ foreach ($key in $modelKeys) {
 for ($i = 0; $i -lt $variants.Count; $i++) {
   $variant = $variants[$i]
   $visionText = if ($variant.Vision) { 'with vision' } else { 'no vision' }
-  $mtpText = if ($variant.Model.mtp) { '  MTP available' } else { '' }
+  # Two ways a model can draft, and both are offered at step 4, so both belong
+  # here. A model-free method names itself instead of claiming to be MTP, and it
+  # is checked first because that is the order step 4 resolves in.
+  $specText = if ($variant.Model.speculative) { "  $(Get-PlatformSetting -Block $variant.Model.speculative -Platform $platform -Name 'specType') available" }
+    elseif ($variant.Model.mtp) { '  MTP available' }
+    else { '' }
   $sizeText = if ($variant.WeightsMiB) {
     if ($variant.Vision) { "weights $(Format-MiB $variant.WeightsMiB) + vision $(Format-MiB $variant.VisionMiB)" }
     else { "weights $(Format-MiB $variant.WeightsMiB)" }
   } else { 'will be downloaded' }
   Write-Host ("  {0,2}) {1,-28} {2,-11}" -f ($i + 1), $variant.Model.name, $visionText) -NoNewline
-  Write-Host "  $sizeText$mtpText" -ForegroundColor DarkGray
+  Write-Host "  $sizeText$specText" -ForegroundColor DarkGray
 }
 
 $choice = Read-Choice -Prompt 'Model' -Maximum $variants.Count -Default 1
@@ -695,66 +700,85 @@ $choice = Read-Choice -Prompt 'Context' -Maximum $contexts.Count -Default $defau
 $contextEntry = $contexts[$choice - 1]
 $contextSize = $contextEntry.Context
 
-# ------------------------------------------------------------------ 4. MTP
+# -------------------------------------------------- 4. SPECULATIVE DECODING
 
-# Whether MTP pays off is a property of the backend, measured per backend and
-# declared in config/backends.json rather than inferred from its name: on
-# Vulkan the cost of maintaining the draft context cancels out the gain. And
-# only if the model ships nextn layers.
-# What MTP costs is measured per model and differs by an order of magnitude:
+# Whether speculation pays off is a property of the backend, measured per
+# backend and declared in config/backends.json rather than inferred from its
+# name: on Vulkan the cost of maintaining the draft context cancels out the
+# gain. And only if the model can draft at all, which happens two ways: an
+# 'mtp' block means real draft weights, a 'speculative' block means a
+# model-free method such as ngram that predicts from the context window.
+# What it costs is measured per model and differs by an order of magnitude:
 # an embedded draft context is built against the whole model, a companion draft
-# file is small. Counting it as free is how a configuration that reports FITS
-# ends up spilling into system RAM.
+# file is small, and a model-free method costs nothing whatsoever. Counting a
+# real cost as free is how a configuration that reports FITS ends up spilling
+# into system RAM.
 #
 # Every setting below can be overridden per platform, because none of them
 # turned out to travel: the same model's embedded MTP costs 1200 MiB on CUDA
 # and 817 on Metal, and is worth enabling on one and not the other.
-$mtpCostRaw = Get-PlatformSetting -Block $model.mtp -Platform $platform -Name 'costMiB'
-$mtpCostMiB = if ($mtpCostRaw) { [double]$mtpCostRaw } else { 512 }
-$mtpAutoEnable = Get-PlatformSetting -Block $model.mtp -Platform $platform -Name 'autoEnable'
-$mtpMaxContext = Get-PlatformSetting -Block $model.mtp -Platform $platform -Name 'maxContext'
-$mtpNote = Get-PlatformSetting -Block $model.mtp -Platform $platform -Name 'note'
-$mtpHeadroomMiB = $mtpCostMiB + 256
-$useMtp = $false
-$mtpReason = ''
-if (-not $model.mtp) {
-  $mtpReason = "this model ships no MTP layers"
-} elseif ($mtpAutoEnable -eq $false) {
-  $mtpReason = "turned off for this model in config/models.json"
+#
+# A model-free method wins over draft weights when a model declares both, which
+# is the order serve.ps1 resolves in too. No model here declares both today.
+$specBlock = if ($model.speculative) { $model.speculative } else { $model.mtp }
+$specType = Get-PlatformSetting -Block $model.speculative -Platform $platform -Name 'specType'
+if (-not $specType) { $specType = if ($model.mtp) { 'draft-mtp' } else { 'none' } }
+$specCostRaw = Get-PlatformSetting -Block $specBlock -Platform $platform -Name 'costMiB'
+# Compared against $null rather than tested for truth, because 0 is a real
+# answer here: a model-free method loads no weights, and reading that as
+# "unset" would charge it the 512 MiB fallback meant for a block that forgot.
+$specCostMiB = if ($null -ne $specCostRaw) { [double]$specCostRaw } else { 512 }
+$specAutoEnable = Get-PlatformSetting -Block $specBlock -Platform $platform -Name 'autoEnable'
+$specMaxContext = Get-PlatformSetting -Block $specBlock -Platform $platform -Name 'maxContext'
+$specNote = Get-PlatformSetting -Block $specBlock -Platform $platform -Name 'note'
+# The +256 is margin around a measured weight cost. A method that loads nothing
+# has no cost to be wrong about, so it reserves nothing and the memory branch
+# below is skipped for it entirely - there is no shortage it could relieve.
+$specHeadroomMiB = if ($specCostMiB -gt 0) { $specCostMiB + 256 } else { 0 }
+$useSpec = $false
+$specReason = ''
+if (-not $specBlock) {
+  $specReason = "this model ships no MTP layers and declares no model-free method"
+} elseif ($specAutoEnable -eq $false) {
+  $specReason = "turned off for this model in config/models.json"
 } elseif ($backend.speculativeDecoding -ne $true) {
-  $mtpReason = "not enabled for the $backendKey backend in config/backends.json"
-} elseif ($mtpMaxContext -and $contextSize -gt [int]$mtpMaxContext) {
+  $specReason = "not enabled for the $backendKey backend in config/backends.json"
+} elseif ($specMaxContext -and $contextSize -gt [int]$specMaxContext) {
   # A ceiling that was measured, not derived. costMiB is modelled as a flat
   # number, but an embedded draft context carries its own KV cache and so grows
   # with the context length: the memory check below would wave through a
   # configuration that loads, reports healthy, and then dies on its first
   # decode. Until the cost is modelled per token, the honest bound is the
   # longest context somebody actually ran.
-  $mtpReason = "only verified up to $([int]$mtpMaxContext / 1024)K on $platform and you picked $($contextSize / 1024)K"
-} elseif (($budgetMiB - $contextEntry.TotalMiB) -lt $mtpHeadroomMiB) {
+  $specReason = "only verified up to $([int]$specMaxContext / 1024)K on $platform and you picked $($contextSize / 1024)K"
+} elseif ($specHeadroomMiB -gt 0 -and ($budgetMiB - $contextEntry.TotalMiB) -lt $specHeadroomMiB) {
   $margin = $budgetMiB - $contextEntry.TotalMiB
-  $mtpReason = if ($margin -lt 0) {
+  $specReason = if ($margin -lt 0) {
     "this configuration already exceeds the budget by $(Format-MiB ([math]::Abs($margin)))"
   } else {
-    "it costs $(Format-MiB $mtpCostMiB) and only $(Format-MiB $margin) is left over"
+    "it costs $(Format-MiB $specCostMiB) and only $(Format-MiB $margin) is left over"
   }
 } else {
-  $useMtp = $true
-  $mtpReason = "costs $(Format-MiB $mtpCostMiB), leaving $(Format-MiB ($budgetMiB - $contextEntry.TotalMiB - $mtpCostMiB)) free"
+  $useSpec = $true
+  $specReason = if ($specCostMiB -gt 0) {
+    "$specType costs $(Format-MiB $specCostMiB), leaving $(Format-MiB ($budgetMiB - $contextEntry.TotalMiB - $specCostMiB)) free"
+  } else {
+    "$specType loads no weights, so it costs no memory at all"
+  }
 }
 
-Write-Step 4 'SPECULATIVE DECODING (MTP)'
-if ($useMtp) {
-  Write-Host "  Enabled: $mtpReason" -ForegroundColor Green
+Write-Step 4 'SPECULATIVE DECODING'
+if ($useSpec) {
+  Write-Host "  Enabled: $specReason" -ForegroundColor Green
   # What the catalog knows about this combination that the memory check cannot
   # express, such as it having been measured to buy nothing.
-  if ($mtpNote) { Write-Host "  $mtpNote" -ForegroundColor Yellow }
-  if ($model.mtp.mode -eq 'draft-model') {
+  if ($specNote) { Write-Host "  $specNote" -ForegroundColor Yellow }
+  if ($specType -eq 'draft-mtp' -and $model.mtp.mode -eq 'draft-model') {
     Write-Host "  Draft model: $($model.mtp.file)" -ForegroundColor DarkGray
     Ensure-Artifact -Path (Join-Path $modelsDirectory $model.mtp.file) -Url $model.mtp.url -Sha256 $model.mtp.sha256
   }
 } else {
-  Write-Host "  Disabled: $mtpReason" -ForegroundColor DarkGray
+  Write-Host "  Disabled: $specReason" -ForegroundColor DarkGray
 }
 
 # -------------------------------------------------------------- 5. HARNESS
@@ -825,7 +849,7 @@ $serveScript = Join-Path $root 'serve.ps1'
 $serveArguments = @('-ModelKey', $modelKey, '-Backend', $backendKey, '-Context', "$contextSize", '-CacheType', $cacheType)
 if ($deviceId) { $serveArguments += @('-Device', $deviceId) }
 if ($useVision) { $serveArguments += '-Vision' }
-if ($useMtp) { $serveArguments += '-Mtp' }
+if ($useSpec) { $serveArguments += '-Spec' }
 
 $powerShellHost = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
 $serverLogPath = Join-Path $root 'llama-server.log'
@@ -908,8 +932,13 @@ Write-Host "  $('=' * 62)" -ForegroundColor Green
 Write-Host "  Model     : $($model.alias)  ($(if ($useVision) { 'with vision' } else { 'no vision' }))"
 Write-Host "  Backend   : $backendKey  -  $budgetLabel"
 Write-Host "  Context   : $($contextSize / 1024)K   (KV $cacheType, $(Format-MiB $contextEntry.KvMiB))"
-$finalMiB = $contextEntry.TotalMiB + $(if ($useMtp) { $mtpCostMiB } else { 0 })
-Write-Host "  MTP       : $(if ($useMtp) { "enabled (+$(Format-MiB $mtpCostMiB))" } else { 'disabled' })"
+$finalMiB = $contextEntry.TotalMiB + $(if ($useSpec) { $specCostMiB } else { 0 })
+# Names the method, because 'enabled' next to a model with no draft weights
+# reads as MTP to anyone who has used this launcher before.
+$specSummary = if (-not $useSpec) { 'disabled' }
+  elseif ($specCostMiB -gt 0) { "$specType (+$(Format-MiB $specCostMiB))" }
+  else { "$specType (no memory cost)" }
+Write-Host "  Spec dec  : $specSummary"
 Write-Host "  Estimated : $(Format-MiB $finalMiB) of $(Format-MiB $budgetMiB) usable"
 Write-Host "  API       : $apiBase"
 Write-Host "  Chat UI   : $apiRoot  (built into llama.cpp, always available)"

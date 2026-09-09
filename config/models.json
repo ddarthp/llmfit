@@ -12,6 +12,16 @@
     "mmprojUrl": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/mmproj-F16.gguf?download=true",
     "mmprojSha256": "f70dc3509053962b0d0d3ee8a7eacebf5d60aa560cad78254ae8698516ae029f",
     "imageMinTokens": 1024,
+    "speculative": {
+      "_comment": "Model-free speculative decoding, kept deliberately OUT of the 'mtp' key. This model carries no draft weights of any kind - the GGUF header reads 427 tensors, architecture qwen35, 32 blocks, and not one key matching nextn, mtp or draft, and the Unsloth repo ships no companion draft file either - so --spec-type draft-mtp can never work here and labelling this block 'mtp' would contradict the note at the end of this entry. The ngram families need no drafter at all: they propose continuations from the tokens already inside the context window.",
+      "specType": "ngram-map-k",
+      "_specTypeComment": "Chosen by measurement, not by reputation. Metal, Q6_K, temp 0 / top_k 1, 200 predicted tokens, against a --spec-type none baseline of 29.93 tok/s. Copy-heavy prompt (reproduce a Python function that is already in the prompt - the best case, because the tokens to predict are literally in context): ngram-map-k 37.63 tok/s = 1.26x, ngram-map-k4v 37.56 = 1.27x, ngram-simple 36.64 = 1.24x, ngram-mod 34.77 = 1.18x, ngram-cache 32.22 = 1.09x. Fresh prompt (new prose with nothing to copy - the worst case): every variant 1.00x except ngram-cache. All 12 outputs came back byte-identical to the baseline, so this is exact decoding, not an approximation. ngram-map-k and ngram-map-k4v tie inside the noise; ngram-map-k is the default because it was fastest on the case that gains anything.",
+      "_rejectedComment": "ngram-cache is deliberately NOT the default: it is the only variant measured SLOWER than no speculation at all, 0.93x on the fresh prompt (27.39 against 29.74 tok/s). The remaining three are simply smaller wins than ngram-map-k.",
+      "_prefillComment": "No prompt-processing gain is claimed, and the first measurement that suggested one was wrong. Prefill appeared to rise from 145 to 205 tok/s, but a warm-up control showed that was the page cache filling on the first read of the session rather than an ngram effect: with everything warm it is 199.3 with ngram against 206.1 without.",
+      "costMiB": 0,
+      "_costComment": "Zero, and not an estimate. An ngram method loads no weights and downloads no companion file - it drafts from the context window - so unlike MTP there is no memory headroom to reserve for it and no reason for a memory check to ever reject it.",
+      "note": "Model-free ngram speculation: measured 1.26x on prompts with text to copy and 1.00x on prompts without, byte-identical output either way."
+    },
     "geometry": {
       "kvElementsPerToken": 16384,
       "kvElementsFixed": 0,

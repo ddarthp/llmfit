@@ -5,7 +5,10 @@ param(
   [string]$Device = '',
   [string]$CacheType = '',
   [switch]$Vision,
-  [switch]$Mtp
+  # Named -Mtp while draft weights were the only speculative method here. It now
+  # also turns on model-free methods, which are not MTP, so the name widened;
+  # the alias keeps every existing caller - llmfit.ps1 included - working.
+  [Alias('Mtp')][switch]$Spec
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,8 +41,8 @@ if ($Context -le 0) { $Context = $serverConfig.contextOptions[0] }
 if ($Context -gt $model.geometry.maxContext) {
   throw "Context $Context exceeds the model maximum ($($model.geometry.maxContext))."
 }
-if ($Mtp -and -not $model.mtp) {
-  throw "$($model.name) ships no MTP layers: speculative decoding cannot be enabled."
+if ($Spec -and -not ($model.mtp -or $model.speculative)) {
+  throw "$($model.name) ships no MTP layers and declares no model-free speculative method: speculative decoding cannot be enabled."
 }
 # The launcher never offers MTP on a backend whose speculativeDecoding is false,
 # so only a hand-written command reaches this. It has to stop here: measured on
@@ -47,7 +50,7 @@ if ($Mtp -and -not $model.mtp) {
 # process inside ggml-backend.cpp with 'pre-allocated tensor (cache_k_l22) in a
 # buffer (Vulkan0) that cannot run the operation'. A thrown message beats a
 # stack trace from a crash the catalog already knew was coming.
-if ($Mtp -and -not $selectedBackend.speculativeDecoding) {
+if ($Spec -and -not $selectedBackend.speculativeDecoding) {
   throw "Speculative decoding is not available on the $Backend backend. config/backends.json sets speculativeDecoding false there, and the comment beside it says why."
 }
 
@@ -56,12 +59,6 @@ $modelPath = Join-Path (Join-Path $root 'models') $model.modelFile
 $required = @($server, $modelPath)
 $mmprojPath = Join-Path (Join-Path $root 'models') $model.mmprojFile
 if ($Vision) { $required += $mmprojPath }
-# Gemma 4 ships MTP as a separate draft model; Qwen embeds it in the main file.
-$mtpPath = $null
-if ($Mtp -and $model.mtp.mode -eq 'draft-model') {
-  $mtpPath = Join-Path (Join-Path $root 'models') $model.mtp.file
-  $required += $mtpPath
-}
 foreach ($path in $required) {
   if (-not (Test-Path -LiteralPath $path)) { throw "Not found: $path" }
 }
@@ -108,11 +105,50 @@ function Get-CacheType {
   return $ServerConfig.cacheType
 }
 
+function Get-SpecType {
+  # Which speculative method llama-server is asked for. Two shapes reach here:
+  # a model that ships draft weights declares 'mtp' and wants draft-mtp, and a
+  # model with no drafter at all can still declare a model-free method in
+  # 'speculative.specType' - an ngram variant drafts from the tokens already in
+  # the context window, so it needs no weights and no companion file. The
+  # model-free block wins when both exist, because a catalog that bothered to
+  # name a method has measured it. Overridable per platform in the same shape as
+  # the cache block, since nothing about speculation travelled between backends.
+  param($Model, [string]$Platform)
+  $block = $Model.speculative
+  if ($block) {
+    $inner = $block.$Platform
+    if ($inner -and $inner.specType) { return $inner.specType }
+    if ($block.specType) { return $block.specType }
+  }
+  if ($Model.mtp) { return 'draft-mtp' }
+  return 'none'
+}
+
 $sampling = Get-SamplingProfile -Model $model -ServerConfig $serverConfig
 $cacheType = if ($CacheType) { $CacheType } else { Get-CacheType -Model $model -ServerConfig $serverConfig -Platform $platform }
 $cacheSource = if ($CacheType) { 'passed in' } else { 'resolved from config' }
 if (-not $serverConfig.cacheTypeBytes.$cacheType) {
   throw "KV cache type '$cacheType' is not declared in config/server.json cacheTypeBytes. Declared types: $(@($serverConfig.cacheTypeBytes.PSObject.Properties.Name) -join ', ')."
+}
+
+$specType = if ($Spec) { Get-SpecType -Model $model -Platform $platform } else { 'none' }
+# Gemma 4 ships MTP as a separate draft model; Qwen embeds it in the main file.
+# The resolved method decides whether that file is needed at all, so a model
+# that also names a model-free method never demands a draft it will not load.
+$mtpPath = $null
+if ($specType -eq 'draft-mtp' -and $model.mtp.mode -eq 'draft-model') {
+  $mtpPath = Join-Path (Join-Path $root 'models') $model.mtp.file
+  if (-not (Test-Path -LiteralPath $mtpPath)) { throw "Not found: $mtpPath" }
+}
+
+# Report the method actually in use. A model-free ngram run is not MTP, and a
+# line that says otherwise describes a configuration nobody launched.
+$specText = 'off'
+if ($Spec) {
+  if ($mtpPath) { $specText = "$specType (draft model: $($model.mtp.file))" }
+  elseif ($specType -eq 'draft-mtp') { $specText = "$specType (embedded draft layers)" }
+  else { $specText = "$specType (model-free, no draft weights)" }
 }
 
 Write-Host ''
@@ -121,7 +157,7 @@ Write-Host "  Backend  : $($selectedBackend.name)" -ForegroundColor Cyan
 Write-Host "  Device   : $(if ($Device) { "$Device (pinned, split-mode none)" } else { 'every device the backend enumerates (llama.cpp default split)' })" -ForegroundColor Cyan
 Write-Host "  Context  : $($Context / 1024)K tokens" -ForegroundColor Cyan
 Write-Host "  Vision   : $(if ($Vision) { 'on (mmproj F16)' } else { 'off' })" -ForegroundColor Cyan
-Write-Host "  MTP      : $(if ($Mtp) { if ($mtpPath) { "on (draft model: $($model.mtp.file))" } else { 'on (embedded draft layers)' } } else { 'off' })" -ForegroundColor Cyan
+Write-Host "  Spec dec : $specText" -ForegroundColor Cyan
 Write-Host "  KV cache : $cacheType  ($cacheSource)" -ForegroundColor Cyan
 Write-Host "  Sampling : $($sampling.Name)  [$($sampling.Source)]" -ForegroundColor Cyan
 Write-Host ("             temp $($sampling.Values.temperature)  top-p $($sampling.Values.topP)  top-k $($sampling.Values.topK)  min-p $($sampling.Values.minP)  presence $($sampling.Values.presencePenalty)  repeat $($sampling.Values.repeatPenalty)") -ForegroundColor DarkGray
@@ -136,7 +172,7 @@ $arguments = @(
   '--ctx-size', $Context
   '--parallel', 1
   '--gpu-layers', $selectedBackend.gpuLayers
-  '--spec-type', $(if ($Mtp) { 'draft-mtp' } else { 'none' })
+  '--spec-type', $specType
   '--flash-attn', 'on'
   '--cache-type-k', $cacheType
   '--cache-type-v', $cacheType
