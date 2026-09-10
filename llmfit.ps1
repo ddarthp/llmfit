@@ -720,9 +720,23 @@ $contextSize = $contextEntry.Context
 #
 # A model-free method wins over draft weights when a model declares both, which
 # is the order serve.ps1 resolves in too. No model here declares both today.
-$specBlock = if ($model.speculative) { $model.speculative } else { $model.mtp }
+#
+# The block has to follow the resolved method rather than be picked separately,
+# or the two can disagree: a model carrying an mtp block plus a speculative
+# block with no specType in it would resolve draft-mtp - real draft weights,
+# 1200 MiB on CUDA - while drawing its cost from the speculative block and
+# reporting 0. The memory check below would then be skipped on exactly the
+# configuration it exists to catch.
 $specType = Get-PlatformSetting -Block $model.speculative -Platform $platform -Name 'specType'
-if (-not $specType) { $specType = if ($model.mtp) { 'draft-mtp' } else { 'none' } }
+if ($specType) {
+  $specBlock = $model.speculative
+} elseif ($model.mtp) {
+  $specType = 'draft-mtp'
+  $specBlock = $model.mtp
+} else {
+  $specType = 'none'
+  $specBlock = $null
+}
 $specCostRaw = Get-PlatformSetting -Block $specBlock -Platform $platform -Name 'costMiB'
 # Compared against $null rather than tested for truth, because 0 is a real
 # answer here: a model-free method loads no weights, and reading that as

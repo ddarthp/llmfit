@@ -19,7 +19,7 @@
       "_rejectedComment": "ngram-cache is deliberately NOT the default: it is the only variant measured SLOWER than no speculation at all, 0.93x on the fresh prompt (27.39 against 29.74 tok/s). The remaining three are simply smaller wins than ngram-map-k.",
       "_prefillComment": "No prompt-processing gain is claimed, and the first measurement that suggested one was wrong. Prefill appeared to rise from 145 to 205 tok/s, but a warm-up control showed that was the page cache filling on the first read of the session rather than an ngram effect: with everything warm it is 199.3 with ngram against 206.1 without.",
       "costMiB": 0,
-      "_costComment": "Zero, and not an estimate. An ngram method loads no weights and downloads no companion file - it drafts from the context window - so unlike MTP there is no memory headroom to reserve for it and no reason for a memory check to ever reject it.",
+      "_costComment": "Zero, and measured rather than argued. Resident memory of llama-server at 8K context, same model, same request: 7607 MiB with --spec-type none and 7616 MiB with ngram-map-k, so the method costs about 9 MiB - 0.1 percent, at the noise floor of a single RSS reading, and rounded to 0 here. That matches what it does: an ngram method loads no weights and downloads no companion file, it drafts from the context window. A zero cost is what lets the memory check skip this method entirely, so it is worth re-measuring rather than assuming if a future ngram variant ever drafts a wider batch.",
       "note": "Model-free ngram speculation: measured 1.26x on prompts with text to copy and 1.00x on prompts without, byte-identical output either way."
     },
     "geometry": {
