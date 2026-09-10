@@ -136,6 +136,7 @@
     "note": "Unsloth Q3. MTP layers are embedded in the model file."
   },
   "qwen36-35b-a3b": {
+    "_speculativeComment": "No speculative decoding, and that is measured rather than assumed. There is no MTP to enable: the GGUF header carries no nextn key at all (searched the raw bytes; the same search finds qwen35.nextn_predict_layers and blk.64.nextn.* in Qwen 3.8 27B, so the method detects MTP where it exists), and the Unsloth repo ships no companion draft file among its 31 files. The model-free ngram families were then measured on Metal, temp 0, 200 predicted tokens, with the no-speculation arm run last so page-cache warm-up could not flatter it: against a 48.08 tok/s baseline, ngram-map-k reached 48.16, ngram-map-k4v 48.06 and ngram-simple 48.19 on a copy-heavy prompt, and 47.6-49.0 on a prompt with nothing to copy. Every variant lands within noise. The reason is the baseline itself: speculation only pays when the target forward is slow, and at 48 tok/s this mixture of experts activates ~3B parameters per token, so the drafting and verification overhead cancels the gain exactly. For contrast, the same ngram-map-k on the dense 9B lifts 29.93 to 37.63 tok/s (1.26x). Do not add a speculative block here without re-measuring.",
     "name": "Qwen 3.6 35B-A3B UD-Q3_K_XL",
     "alias": "qwen3.6-35b-a3b-q3",
     "_maxTokensComment": "Published: 'Adequate Output Length: 32,768 tokens for most queries'. A ceiling only, capped by harness.maxOutputPercent against the context actually loaded.",
