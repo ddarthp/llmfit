@@ -41,7 +41,7 @@ Running a local model for coding usually means guessing. How much context fits? 
 - It asks `llama.cpp` itself which devices exist and how much memory they have.
 - It reads the **GGUF header** to compute the exact KV cache size for each context length.
 - Its overhead constants are **calibrated against `nvidia-smi`**, not estimated.
-- It enables speculative decoding only when the model actually has the layers for it and the memory to spare.
+- It enables speculative decoding only when the model can actually draft — with its own layers, or with a model-free method that needs none — and the memory is there to spare.
 
 The result is a fit table you can trust *before* you wait three minutes for a 13 GB model to load.
 
@@ -160,8 +160,8 @@ The choice is sent on as `--device <id> --split-mode none`, and the fit table in
 Every model in the catalog, each with vision on and off:
 
 ```
- 1) Qwen 3.5 9B Q6_K             with vision  weights 6.9 GiB + vision 876 MiB
- 2) Qwen 3.5 9B Q6_K             no vision    weights 6.9 GiB
+ 1) Qwen 3.5 9B Q6_K             with vision  weights 6.9 GiB + vision 876 MiB  ngram-map-k available
+ 2) Qwen 3.5 9B Q6_K             no vision    weights 6.9 GiB  ngram-map-k available
  3) Qwen 3.8 27B UD-Q3_K_XL      with vision  weights 12.2 GiB + vision 885 MiB  MTP available
  4) Qwen 3.8 27B UD-Q3_K_XL      no vision    weights 12.2 GiB  MTP available
  5) Gemma 4 E4B QAT              with vision  will be downloaded  MTP available
@@ -262,20 +262,22 @@ The launcher's menu offers only `f16` and `q8_0`, because those are the two wort
 
 Prefer a shorter context over a quantized cache. The fit table offers 32K, 48K, 56K and 72K through 112K precisely so you can trade context for memory without leaving the GPU.
 
-### 4. Speculative decoding (MTP)
+### 4. Speculative decoding
 
 Decided automatically, and it tells you why:
 
-- Only if the model ships MTP at all. It comes in two shapes:
+- Only if the model can draft at all. **With draft weights** — an `mtp` block — in three shapes:
   - **Embedded** — Qwen 3.8 27B carries `nextn_predict_layers = 1` inside the model file.
   - **Separate draft model** — every Gemma 4 ships an `mtp-*.gguf` companion, downloaded on demand and passed with `--spec-draft-model`.
   - **Separate full build** — Qwen 3.6 35B-A3B publishes MTP as a different 16 GB model file (41 blocks against 40, 753 tensors against 733). That makes it a choice at download time, not a toggle at step 4, so the catalog entry declares no `mtp` block and explains why. Register the MTP build as its own entry if you want it.
+
+  Or **without any weights at all** — a `speculative` block, where `llama-server` drafts from the tokens already inside the context window and no file is downloaded. Qwen 3.5 9B uses `ngram-map-k`: its GGUF carries no `nextn_predict_layers`, so `draft-mtp` can never work for it, but measured on Metal at temp 0 it reaches **1.26× on a prompt with text to copy** and **1.00× on one without**, with byte-identical output either way. `ngram-cache` was the only variant measured *slower* than no speculation at all (0.93×), so it is deliberately not the default. No prompt-processing gain is claimed: an apparent one turned out to be page-cache warm-up on the first run.
 - Only on a backend that declares `speculativeDecoding: true` in `config/backends.json`. CUDA and Metal do. Vulkan does not: the cost of maintaining the draft context was measured there and cancels the gain.
 - Only up to a `maxContext` when the catalog records one. That ceiling is the longest context somebody actually ran, not a derived limit — see [what is different on macOS](#what-is-different-on-macos).
-- Only if its measured cost fits in what is left, with a margin. See the [table above](#reference-measurements) for what each model charges.
-- Only if the catalog lets it. `mtp.autoEnable: false` turns it off for a model regardless. **The Qwen 27B ships with it off**: on a 16 GB card that model already sits near the ceiling, and 1200 MiB more leaves nothing for anything else touching the GPU. Set it to `true` if your card has room.
+- Only if its measured cost fits in what is left, with a margin. See the [table above](#reference-measurements) for what each model charges. A method that loads no weights costs nothing, so it reserves nothing and is never turned down for memory.
+- Only if the catalog lets it. `autoEnable: false` turns it off for a model regardless. **The Qwen 27B ships with it off**: on a 16 GB card that model already sits near the ceiling, and 1200 MiB more leaves nothing for anything else touching the GPU. Set it to `true` if your card has room.
 
-When it is off, `--spec-type none` is passed explicitly. A state shown on screen should be controlled by the launcher, not inherited from a default that can change between releases.
+When it is off, `--spec-type none` is passed explicitly, and when it is on the status line names the method that was resolved rather than calling everything MTP. A state shown on screen should be controlled by the launcher, not inherited from a default that can change between releases.
 
 ### 5. Harness
 
@@ -324,7 +326,7 @@ On Windows the PATH installer adds `bin\`, `tools\node` and Pi to the user `PATH
 | Script | Flags | Purpose |
 | --- | --- | --- |
 | `llmfit.ps1` | `-Help` | The launcher itself |
-| `serve.ps1` | `-ModelKey` `-Backend` `-Context` `-CacheType` `-Device` `-Vision` `-Mtp` | Starts `llama-server` directly, no menus |
+| `serve.ps1` | `-ModelKey` `-Backend` `-Context` `-CacheType` `-Device` `-Vision` `-Spec` | Starts `llama-server` directly, no menus. `-Spec` was called `-Mtp` while draft weights were the only method here, and that name still works as an alias |
 | `verify.ps1` | `-Full` | Integrity check. `-Full` requires the whole catalog |
 | `clean.ps1` | `-IncludeLogs` `-Force` | Reclaim disk. `-Force` skips the confirmation |
 | `install-path.ps1` | — | `PATH` setup |
