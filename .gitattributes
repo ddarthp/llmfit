@@ -16,3 +16,7 @@
 *.js text eol=lf
 *.css text eol=lf
 *.html text eol=lf
+
+# Artwork for the Steam library entry. Marked binary explicitly rather than
+# left to text=auto's guess, because a mangled PNG fails silently.
+*.png binary

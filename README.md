@@ -332,6 +332,7 @@ Open whatever folder you want to work in, paste, done. The server stays in its o
 | `VERIFY.cmd` | `VERIFY.command` | `VERIFY.sh` | Checks the integrity of everything installed |
 | `CLEAN.cmd` | `CLEAN.command` | `CLEAN.sh` | Deletes already-extracted archives to reclaim disk |
 | `PANEL.cmd` | `PANEL.command` | `PANEL.sh` | The same five steps as a web page, for a controller or a phone. See [the panel](#the-panel) |
+| — | — | `add-to-steam.ps1` | Puts `PANEL.sh` in the Steam library as a non-Steam game, artwork included |
 
 On Windows the PATH installer adds `bin\`, `tools\node` and Pi to the user `PATH` through the registry. On macOS and Linux it writes a marked block adding `bin/` only, into `~/.zshrc` under zsh and into `~/.bash_profile` (macOS) or `~/.bashrc` (Linux) under bash — which file bash reads is not the same on the two, since a macOS terminal opens a login shell and a Linux one does not. `tools/node` and `tools/pi` are runtimes a Windows package vendors so an offline machine can still run Pi; everywhere else Pi is an npm install like any other. The file is backed up as `.llmfit-backup` before the first write and re-running only rewrites the block.
 
@@ -670,7 +671,19 @@ The launcher is a terminal wizard, which is the wrong shape for a machine you dr
 
 It starts the panel, works out which session it is in, and opens it — Steam's built-in browser under Gaming Mode, Firefox in kiosk mode on the desktop. The page is plain HTML, CSS and JavaScript with no framework and no CDN, because the machine it runs on may have no network left once the weights are down.
 
-**Put it in your Steam library.** Desktop Mode → Steam → Games → *Add a Non-Steam Game* → Browse → pick `PANEL.sh`. It then launches from Gaming Mode like any other entry, and the thumbstick drives the cursor across the tiles. Touch works directly, and arrow keys with Enter and Escape work wherever a keyboard or a Steam Input layout provides them. A gamepad that reaches the page through the Gamepad API drives it too: D-pad to move, **A** to select, **B** to go back.
+**Put it in your Steam library**, with one command rather than six clicks:
+
+```bash
+./tools/pwsh/pwsh -File add-to-steam.ps1
+```
+
+It writes a non-Steam shortcut pointing at `PANEL.sh`, with library artwork. Run it again and it replaces its own entry rather than adding a second; `-Remove` takes it out again.
+
+Two things it insists on. It **refuses while Steam is running**, because Steam keeps its own copy of `shortcuts.vdf` in memory and writes it back on exit — an edit made underneath a live Steam is discarded with no error at all. And it **backs the file up once** before the first write, the same `.llmfit-backup` convention the harness configuration uses. `shortcuts.vdf` is Valve's binary key-value format, so the script parses and re-emits the whole file; the round trip was checked byte for byte against a real 47-entry library before it was allowed to write anything.
+
+The manual route still works if you prefer it: Desktop Mode → Steam → Games → *Add a Non-Steam Game* → Browse → pick `PANEL.sh`.
+
+Either way it then launches from Gaming Mode like any other entry, and the thumbstick drives the cursor across the tiles. Touch works directly, and arrow keys with Enter and Escape work wherever a keyboard or a Steam Input layout provides them. A gamepad that reaches the page through the Gamepad API drives it too: D-pad to move, **A** to select, **B** to go back.
 
 **It shows the same numbers as the terminal.** Backend and budget, every model with what it weighs, the KV cache type, the fit table with `FITS` / `TIGHT` / `TOO BIG` per context length, and whether speculative decoding is on with the sentence that says why. That is not a reimplementation: `lib/fit.ps1` computes it once and both front ends print what it returns. A fit table nobody can trust is the thing this project exists to replace, and two of them would be worse than none.
 
