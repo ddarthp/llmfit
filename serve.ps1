@@ -15,11 +15,12 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $configDirectory = Join-Path $root 'config'
 
-# Windows PowerShell 5.1 defines neither $IsWindows nor $IsMacOS, and only ever
-# runs on Windows, so their absence answers the question. See llmfit.ps1.
+# Windows PowerShell 5.1 defines none of $IsWindows, $IsMacOS and $IsLinux, and
+# only ever runs on Windows, so their absence answers the question. See llmfit.ps1.
 $onWindows = if ($null -ne $IsWindows) { [bool]$IsWindows } else { $true }
 $onMacOS = if ($null -ne $IsMacOS) { [bool]$IsMacOS } else { $false }
-$platform = if ($onMacOS) { 'macos' } else { 'windows' }
+$onLinux = if ($null -ne $IsLinux) { [bool]$IsLinux } else { $false }
+$platform = if ($onMacOS) { 'macos' } elseif ($onLinux) { 'linux' } else { 'windows' }
 $serverExe = if ($onWindows) { 'llama-server.exe' } else { 'llama-server' }
 
 $catalog = Get-Content -Raw -LiteralPath (Join-Path $configDirectory 'models.json') | ConvertFrom-Json
@@ -161,7 +162,17 @@ Write-Host "  Spec dec : $specText" -ForegroundColor Cyan
 Write-Host "  KV cache : $cacheType  ($cacheSource)" -ForegroundColor Cyan
 Write-Host "  Sampling : $($sampling.Name)  [$($sampling.Source)]" -ForegroundColor Cyan
 Write-Host ("             temp $($sampling.Values.temperature)  top-p $($sampling.Values.topP)  top-k $($sampling.Values.topK)  min-p $($sampling.Values.minP)  presence $($sampling.Values.presencePenalty)  repeat $($sampling.Values.repeatPenalty)") -ForegroundColor DarkGray
-Write-Host "  API      : http://$($serverConfig.host):$($serverConfig.port)/v1" -ForegroundColor Cyan
+# The bind address is not an address anything connects to; see lib/net.ps1.
+# This window is often the only thing on screen when serve.ps1 is run directly,
+# so it answers 'where is it' the same way the launcher's summary does.
+. (Join-Path $root (Join-Path 'lib' 'net.ps1'))
+$endpoint = Get-ServerEndpoint -ServerConfig $serverConfig -OnWindows $onWindows -OnMacOS $onMacOS -OnLinux $onLinux
+Write-Host "  API      : $($endpoint.LocalRoot)/v1" -ForegroundColor Cyan
+if ($endpoint.IsWildcard -and $endpoint.LanAddresses.Count) {
+  Write-Host "  LAN      : $($endpoint.LanRoots[0])/v1$(if ($endpoint.MdnsRoot) { "   or $($endpoint.MdnsRoot)/v1" })" -ForegroundColor Cyan
+} elseif (-not $endpoint.IsWildcard) {
+  Write-Host "  LAN      : off - bound to $($endpoint.BindHost)" -ForegroundColor DarkGray
+}
 Write-Host ''
 
 # Anything reported on screen is set by an explicit flag. Inheriting a default

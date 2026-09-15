@@ -196,8 +196,99 @@
         }
       }
     },
-    "_mtpComment": "MTP exists for this model but cannot be a step-4 toggle, so no mtp block is declared here. Unlike the 27B, which carries its nextn layers inside the same file, and unlike Gemma 4, which ships a small companion draft, Qwen 3.6 publishes MTP as a SEPARATE FULL BUILD in unsloth/Qwen3.6-35B-A3B-MTP-GGUF: 41 blocks against 40, nextn_predict_layers 1, 753 tensors against 733, and 16429 MiB against 16064 for the same UD-Q3_K_XL quantization. Choosing it means downloading a different 16 GB file, which is a decision at step 2, not step 4. Register it as its own catalog entry if you want it. Temper expectations first: the vendor's own figure for MoE models is 1.15-1.25x against 1.4-2.2x for dense ones, and the 27B measured here - also hybrid attention/SSM - gained nothing at 0.93 draft acceptance.",
+    "_mtpComment": "MTP exists for this model but cannot be a step-4 toggle, so no mtp block is declared here. Unlike the 27B, which carries its nextn layers inside the same file, and unlike Gemma 4, which ships a small companion draft, Qwen 3.6 publishes MTP as a SEPARATE FULL BUILD in unsloth/Qwen3.6-35B-A3B-MTP-GGUF: 41 blocks against 40, nextn_predict_layers 1, 753 tensors against 733, and 16429 MiB against 16064 for the same UD-Q3_K_XL quantization. Choosing it means downloading a different 16 GB file, which is a decision at step 2, not step 4, so it IS its own entry: qwen36-35b-a3b-mtp, right below this one, where the Linux measurement of what it buys is recorded. Temper expectations first: the vendor's own figure for MoE models is 1.15-1.25x against 1.4-2.2x for dense ones, and the 27B measured here - also hybrid attention/SSM - gained nothing at 0.93 draft acceptance.",
     "note": "Hybrid attention/SSM mixture of experts. No overhead block: nothing about this model has been measured on any platform yet, so the fit table borrows constants and says so on screen."
+  },
+  "qwen36-35b-a3b-mtp": {
+    "_comment": "The same model as qwen36-35b-a3b, from the SEPARATE MTP BUILD Qwen publishes: 41 blocks against 40, nextn_predict_layers 1, 753 tensors against 733, 16429 MiB against 16064 for the same UD-Q3_K_XL quantization. It is its own entry rather than a toggle because choosing it means downloading a different 16 GB file, which is a decision at step 2 and not at step 4. Both files are called Qwen3.6-35B-A3B-UD-Q3_K_XL.gguf in their own repositories, so this one is stored under an MTP name locally: two entries cannot share a filename and disagree about its hash.",
+    "name": "Qwen 3.6 35B-A3B UD-Q3_K_XL (MTP build)",
+    "alias": "qwen3.6-35b-a3b-q3-mtp",
+    "_maxTokensComment": "Published: 'Adequate Output Length: 32,768 tokens for most queries'. A ceiling only, capped by harness.maxOutputPercent against the context actually loaded.",
+    "maxTokens": 32768,
+    "modelFile": "Qwen3.6-35B-A3B-MTP-UD-Q3_K_XL.gguf",
+    "modelUrl": "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-Q3_K_XL.gguf?download=true",
+    "modelSha256": "3fba9ab57290b34726837521335bf9268397174f3dd662880e2d0c5264d17b81",
+    "mmprojFile": "Qwen3.6-35B-A3B-MTP-mmproj-F16.gguf",
+    "mmprojUrl": "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/resolve/main/mmproj-F16.gguf?download=true",
+    "mmprojSha256": "71f3cbc1f7cc0f30d09d41cfa924c0060827ebc33bf15ace7e86661e856f0160",
+    "_mmprojComment": "Taken from the MTP repository rather than reused from the non-MTP entry. The two encoders are not byte-identical - different SHA-256 - while the header is the same encoder: clip.vision block_count 27, embedding_length 1152, the same one the 27B's imageMinTokens was verified on. Downloading the one that ships beside these weights costs 858 MiB and removes the question.",
+    "imageMinTokens": 1024,
+    "cache": {
+      "_comment": "Same reasoning as the non-MTP entry: this model is large enough that the KV type decides whether a long context is reachable at all. The difference here is that Linux is measured rather than assumed.",
+      "linux": {
+        "type": "q8_0",
+        "_comment": "MEASURED on Vulkan, gfx1103 (Radeon 780M class iGPU, Ryzen Z1 Extreme, SteamOS). The CUDA collapse does not exist on this backend: with Gemma 4 E4B, llama-bench pp512/tg128, f16 gives 353.3 and 31.9 tok/s and q8_0 gives 329.3 and 31.0 - 7% off prompt processing and 3% off generation, against the 84x prompt collapse that the same change causes on CUDA. Measured on that model rather than this one because the point being tested is the backend's flash-attention kernel, not the weights. What q8_0 buys here is the whole configuration: 340 MiB of cache at 32K instead of 640, which is the difference between this model fitting with vision and not fitting at all."
+      },
+      "macos": {
+        "type": "q8_0",
+        "_comment": "UNMEASURED ON METAL, inherited from the non-MTP entry - same weights, same quantization, same argument: q8_0 is the mildest option at 1.0625 bytes per element and roughly halves the cache against f16. If generation looks degraded or prompt processing collapses, set this back to f16 and shorten the context instead."
+      },
+      "windows": {
+        "type": "f16",
+        "_comment": "Deliberately NOT quantized on CUDA, for the measurement recorded against the non-MTP entry: f16 gives 3355 tok/s prompt and 65.1 generation, q4_1 gives 40 and 10.9, because CUDA flash attention has no quantized-KV kernel and attention falls off the GPU while nothing reports an error."
+      }
+    },
+    "geometry": {
+      "kvElementsPerToken": 10240,
+      "kvElementsFixed": 0,
+      "maxContext": 262144,
+      "detail": {
+        "architecture": "qwen35moe",
+        "blockCount": 41,
+        "nextnPredictLayers": 1,
+        "expertCount": 256,
+        "expertUsedCount": 8,
+        "fullAttentionInterval": 4,
+        "attentionLayers": 10,
+        "headCountKv": 2,
+        "keyLength": 256,
+        "valueLength": 256,
+        "derivation": "Read from this file's GGUF header, then CONFIRMED against llama.cpp itself rather than left as arithmetic. The header gives block_count 41, full_attention_interval 4, nextn_predict_layers 1, head_count_kv 2, key_length 256, value_length 256. The extra 41st block is the nextn layer and it adds nothing to the target cache: loaded at 32768 with q8_0, llama.cpp reports 'llama_kv_cache: size = 340.00 MiB (32768 cells, 10 layers)', the same 10 attention layers and the same 10240 elements per token as the 40-block build. 340 MiB / 32768 = 10880 bytes per token = 10240 x 1.0625. The other 30 layers are SSM with fixed-size state (ssm.state_size 128, ssm.conv_kernel 4, ssm.group_count 16), so the fixed term is 0 and folded into overhead.",
+        "moe": "256 experts, 8 active per token. All 256 must be resident, so the weights bill is the full 16429 MiB while only about 3B parameters are active per token."
+      },
+      "summary": "hybrid attention/SSM mixture of experts with an embedded MTP layer: 10 of 41 layers hold a KV cache, 8 of 256 experts active"
+    },
+    "sampling": {
+      "_comment": "Published for this model, including a coding profile, which is why nothing here is extrapolated.",
+      "_source": "https://unsloth.ai/docs/models/qwen3.6",
+      "profile": "coding",
+      "profiles": {
+        "coding": {
+          "_comment": "Documented as thinking mode with the temperature lowered for precise coding; every other value is the thinking profile unchanged.",
+          "temperature": 0.6, "topP": 0.95, "topK": 20, "minP": 0.0, "presencePenalty": 0.0, "repeatPenalty": 1.0
+        },
+        "thinking": {
+          "temperature": 1.0, "topP": 0.95, "topK": 20, "minP": 0.0, "presencePenalty": 0.0, "repeatPenalty": 1.0
+        },
+        "instruct": {
+          "temperature": 0.7, "topP": 0.8, "topK": 20, "minP": 0.0, "presencePenalty": 1.5, "repeatPenalty": 1.0
+        }
+      }
+    },
+    "mtp": {
+      "mode": "embedded",
+      "costMiB": 801,
+      "_costComment": "The top-level figure is the Linux measurement below, standing in for platforms where nobody has measured this build. It is NOT a constant: the draft context carries its own KV cache and grows with context. See the linux block for the decomposition.",
+      "autoEnable": false,
+      "_autoEnableComment": "Off by default everywhere except Linux, where it was measured. On CUDA and Metal this build has never been run at all - the non-MTP file is what those measurements were taken on - so enabling it by default would be asserting a result nobody has.",
+      "linux": {
+        "autoEnable": true,
+        "costMiB": 801,
+        "_costComment": "MEASURED on Vulkan, gfx1103, 32K with vision and q8_0 KV, sampling amdgpu mem_info_vram_used + mem_info_gtt_used against an idle baseline: 17673 MiB without MTP, 18474 with. The decomposition llama.cpp prints is 64.00 MiB of draft KV (32768 cells, 1 layer, and f16 regardless of cache-type-k, so 2048 bytes per token) plus 76.02 MiB of draft compute buffer; the rest is the second context's own allocations. Only the 64 MiB part scales with context, but scale the whole figure conservatively rather than the KV alone until someone measures a second length.",
+        "note": "Measured 1.33x. Enabled because it pays here, unlike every other speculative result in this catalog."
+      },
+      "_linuxFindingComment": "The first speculative decoding in this catalog that actually pays, and it contradicts what the non-MTP entry predicts for this architecture. Measured through llama-server at 32K with vision and q8_0 KV, temp 0, 200 predicted tokens, two runs per arm: without speculation 28.59 and 28.17 tok/s, with MTP 38.34 and 37.47, at draft acceptance 0.71-0.73 and mean draft length 3.11-3.19. That is 1.33x, above the vendor's own 1.15-1.25x band for MoE models. It does not refute the 27B finding on Metal - a hybrid attention/SSM model still has to walk its SSM state forward one position per verified token - it says the baseline decides the answer: the 27B was drafting against a 10.7 tok/s target on Metal where the overhead cancels the gain, and the ngram measurement on the non-MTP build of this model was drafting against a 48 tok/s target. Here the target runs at 28 tok/s with real nextn layers rather than an ngram guess, and the trade lands on the right side. Prompt processing is unaffected: llama-bench pp512 gives 238.63 tok/s.",
+      "_ceilingComment": "No maxContext is declared because the fit table already stops this one: at 32K with vision the measured total is 18474 MiB against 18739 usable on the machine it was measured on, and 48K would add roughly 400 MiB of target and draft cache on top. If you run this on a card with room above that, the ceiling here is untested, not known to be safe."
+    },
+    "overhead": {
+      "_comment": "Only a linux block, because Linux is the only platform this build has been run on. On CUDA and Metal the launcher will say the estimate is borrowed, which is true.",
+      "linux": {
+        "_comment": "MEASURED on Vulkan, gfx1103, 32K with q8_0 KV, by sampling amdgpu mem_info_vram_used + mem_info_gtt_used against an idle baseline of 1340 MiB. Without vision: 16564 MiB used, against 16429 of weights and 340 of KV, so the base term is -205. Negative for the usual reason plus a specific one here: llama.cpp keeps 515.31 MiB of this file in a Vulkan_Host buffer and only 15499.34 MiB reaches the device. With vision: 17673 MiB, which is 1109 more for an 858 MiB encoder, so the vision term is 251.",
+        "baseMiB": -205,
+        "visionMiB": 251
+      }
+    },
+    "note": "The MTP build. Same weights as qwen36-35b-a3b plus the nextn layer, 365 MiB larger, and the only entry here whose speculative decoding was measured to be worth enabling - on Linux, on Vulkan, on an iGPU. See the mtp block before assuming it carries over to your hardware."
   },
   "gemma4-e4b": {
     "name": "Gemma 4 E4B QAT",
@@ -216,7 +307,11 @@
       "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-qat-GGUF/resolve/main/mtp-gemma-4-E4B-it.gguf?download=true",
       "sha256": "423074e537504b4f9ec5eafed5c639fac82c96631626efccacdd3c4039b20605",
       "costMiB": 66,
-      "_costComment": "Measured: 4610 MiB without, 4676 with. A 57 MB draft model plus its context."
+      "_costComment": "Measured: 4610 MiB without, 4676 with. A 57 MB draft model plus its context.",
+      "linux": {
+        "autoEnable": false,
+        "_comment": "MEASURED on Vulkan, gfx1103, 32K with an f16 cache, temp 0, 200 predicted tokens, two runs per arm: with the draft model 27.15 and 25.58 tok/s, without it 25.82 and 28.59, at draft acceptance 0.33-0.34. The ranges overlap, so this buys nothing here and it is off rather than costing 66 MiB and a second model load for noise. Worth recording separately: it RUNS. The Windows note on this same Vulkan backend has this exact path aborting during KV allocation, and on Linux with the same b10566 build it loads, generates and stops cleanly - so that abort is not the whole backend's behaviour, wherever it comes from."
+      }
     },
     "geometry": {
       "kvElementsPerToken": 8192,
@@ -275,6 +370,10 @@
       "url": "https://huggingface.co/unsloth/gemma-4-12B-it-qat-GGUF/resolve/main/mtp-gemma-4-12B-it.gguf?download=true",
       "sha256": "fcb35dea42c71333db904cee11baac525c9ef872818ee3753f6cb156f3c6f4f6",
       "costMiB": 294,
+      "linux": {
+        "autoEnable": false,
+        "_comment": "Off by inheritance rather than by measurement, and the difference matters: nobody has run THIS model's companion draft on Vulkan. What was measured there is its E4B sibling, where acceptance lands at 0.34 and generation is within noise of no speculation at all. Different weights, different draft file, so treat this as a default and not a finding - measure it and set it true if it pays on your hardware."
+      },
       "_costComment": "Measured: 7492 MiB without, 7786 with, at 128K. That is the 242 MB draft model plus 52 MiB of context."
     },
     "geometry": {
@@ -333,6 +432,10 @@
       "url": "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-qat-GGUF/resolve/main/mtp-gemma-4-26B-A4B-it.gguf?download=true",
       "sha256": "7272d97595f0d4c74bd7b623492b7dbdaafd8b7c72f329a8270ba4eca68f768a",
       "costMiB": 292,
+      "linux": {
+        "autoEnable": false,
+        "_comment": "Off by inheritance rather than by measurement, and the difference matters: nobody has run THIS model's companion draft on Vulkan. What was measured there is its E4B sibling, where acceptance lands at 0.34 and generation is within noise of no speculation at all. Different weights, different draft file, so treat this as a default and not a finding - measure it and set it true if it pays on your hardware."
+      },
       "_costComment": "Estimated from the 12B: same 240 MB draft size, so the same shape of cost. Not measured, because MTP never fits on a 16 GB card with this model."
     },
     "geometry": {

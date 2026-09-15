@@ -33,12 +33,19 @@ foreach ($property in $backends.PSObject.Properties) {
   }
 }
 
-# The portable PowerShell tarball the macOS bootstrap downloads is reclaimable
-# for the same reason: once tools/pwsh exists, the archive is 68 MB of nothing.
-if ($onMacOS) {
+# The portable PowerShell tarball a bootstrap downloads is reclaimable for the
+# same reason: once tools/pwsh exists, the archive is ~70 MB of nothing. Windows
+# ships PowerShell and downloads none, so there is never one to reclaim there.
+if (-not $onWindows) {
+  $osKey = if ($onMacOS) { 'macos' } else { 'linux' }
+  $archKey = switch -Regex (& uname -m) {
+    '^(x86_64|amd64)$' { 'x64' }
+    '^(aarch64|arm64)$' { 'arm64' }
+    default { $null }
+  }
   $bootstrapPath = Join-Path $configDirectory 'bootstrap.json'
-  if (Test-Path -LiteralPath $bootstrapPath) {
-    $bootstrap = (Get-Content -Raw -LiteralPath $bootstrapPath | ConvertFrom-Json).macos.arm64
+  if ($archKey -and (Test-Path -LiteralPath $bootstrapPath)) {
+    $bootstrap = ((Get-Content -Raw -LiteralPath $bootstrapPath | ConvertFrom-Json).$osKey).$archKey
     $extracted = Join-Path (Join-Path $root 'tools') (Join-Path $bootstrap.folder $bootstrap.entrypoint)
     if ($bootstrap -and (Test-Path -LiteralPath $extracted)) {
       $archivePath = Join-Path $downloadsDirectory (Split-Path -Leaf ([uri]$bootstrap.url).AbsolutePath)

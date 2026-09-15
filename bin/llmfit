@@ -1,5 +1,14 @@
-#!/bin/zsh
-# The global command on macOS, once INSTALL-PATH.command has run.
+#!/bin/sh
+# The global command on macOS and Linux, once INSTALL-PATH has run.
 # Its Windows sibling is bin/llmfit.cmd.
-source "${0:A:h:h}/lib/bootstrap.zsh"
-llmfit::run llmfit.ps1 "$@"
+#
+# One file for both, because a name on the PATH carries no extension to pick a
+# platform with. It only decides which entry point to hand over to: those carry
+# the shebang for the shell their bootstrap is written in, which is why this
+# file execs them instead of sourcing anything itself.
+here="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)"
+case "$(uname -s)" in
+  Darwin) exec "$here/START.command" "$@" ;;
+  Linux)  exec "$here/START.sh" "$@" ;;
+  *) printf '\n  llmfit has no entry point for %s.\n\n' "$(uname -s)" >&2; exit 1 ;;
+esac

@@ -1,5 +1,34 @@
 {
-  "_comment": "Read by START.command before any PowerShell exists on the machine, which is why this file is flat enough for jq and separate from server.json. macOS ships no PowerShell, so the launcher provisions a portable copy the same way it provisions llama.cpp: download, verify the SHA-256, extract, never install. A pwsh already on PATH is used instead and nothing is downloaded.",
+  "_comment": "Read by START.command and START.sh before any PowerShell exists on the machine, which is why this file is flat enough for jq and separate from server.json. Neither macOS nor a stock Linux ships PowerShell, so those launchers provision a portable copy the same way they provision llama.cpp: download, verify the SHA-256, extract, never install. A pwsh already on PATH is used instead and nothing is downloaded.",
+  "linux": {
+    "_comment": "Same contract as macOS, one entry per architecture. The x64 and arm64 tarballs are the portable builds: they need no glibc newer than what every current distro ships, and the only shared library they can be missing on a stripped-down image is libicu, which lib/bootstrap.sh names if the binary refuses to start.",
+    "x64": {
+      "name": "PowerShell 7.6.5 (portable)",
+      "version": "7.6.5",
+      "folder": "pwsh",
+      "entrypoint": "pwsh",
+      "url": "https://github.com/PowerShell/PowerShell/releases/download/v7.6.5/powershell-7.6.5-linux-x64.tar.gz",
+      "sha256": "b34ab3b19acac1d3d4d0d3cfdb02acf62f457b0b6a962ff008132033f7566844",
+      "bytes": 73393424,
+      "tree": {
+        "files": 580,
+        "bytes": 178069508
+      }
+    },
+    "arm64": {
+      "name": "PowerShell 7.6.5 (portable)",
+      "version": "7.6.5",
+      "folder": "pwsh",
+      "entrypoint": "pwsh",
+      "url": "https://github.com/PowerShell/PowerShell/releases/download/v7.6.5/powershell-7.6.5-linux-arm64.tar.gz",
+      "sha256": "ed4084f215d8bce2edd23aa7cb1f1e7b0818e41363a635a22065d2701b6141df",
+      "bytes": 69401720,
+      "tree": {
+        "files": 580,
+        "bytes": 194221784
+      }
+    }
+  },
   "macos": {
     "arm64": {
       "name": "PowerShell 7.6.5 (portable)",

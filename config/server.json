@@ -1,6 +1,7 @@
 {
+  "_portComment": "8080 was the default and it is not free on every machine: on SteamOS the Steam client's steamwebhelper already listens on 127.0.0.1:8080, and a wildcard bind over it fails with 'couldn't bind HTTP server socket, hostname: 0.0.0.0, port: 8080'. 8088 was free here. Any port works - this one is only a default that collides with less.",
   "host": "0.0.0.0",
-  "port": 8080,
+  "port": 8088,
   "_platformsComment": "What --list-devices reports as 'total' does not mean the same thing on both platforms, so the constants that turn it into a budget cannot be shared. On Windows it is the raw dedicated VRAM of the card, with nothing held back. On Metal it is already recommendedMaxWorkingSetSize, the figure macOS itself recommends a process stay under.",
   "platforms": {
     "windows": {
@@ -8,6 +9,12 @@
       "deviceReserveMiB": 320,
       "_safetyComment": "Windows does not let one process hold all of the dedicated VRAM: WDDM keeps headroom for the desktop compositor and quietly moves the excess to shared memory, which is system RAM. There is no error, only a collapse in speed. Measured on a 16 GB card: a configuration nvidia-smi reported at 14564 of 16303 MiB already had 256 MiB spilled. The margin is a percentage of total memory held back so the fit table stops promising the last gigabyte.",
       "safetyMarginPercent": 10
+    },
+    "linux": {
+      "_budgetComment": "Not calibrated on Linux yet, and the numbers say so rather than pretending otherwise. The reserve is the Windows figure carried over: it stands for the same thing on both systems - the slice of the card the driver holds before any process sees it - and 320 MiB measured against nvidia-smi is the closest available number for the same driver on the other operating system. Measure it here against nvidia-smi the way the Windows constant was measured and replace it.",
+      "deviceReserveMiB": 320,
+      "_safetyComment": "Lower than Windows on purpose. The Windows margin exists because WDDM will not let one process hold all of the dedicated VRAM and quietly pages the excess into system RAM, with no error and a collapse in speed. Linux has no such behaviour: an allocation that does not fit fails loudly. What is left is the memory the desktop compositor holds and this launcher cannot see, which is real but much smaller than what WDDM takes. Set it to 0 on a headless machine, where nothing else is on the card.",
+      "safetyMarginPercent": 5
     },
     "macos": {
       "_budgetComment": "Both constants are zero on purpose, and that is not the same as having no margin. Metal reports recommendedMaxWorkingSetSize as its total: measured on a 24 GiB M4 Pro, --list-devices says 18186 MiB, which is 74% of the machine. macOS has already held back 6.4 GB for itself before llmfit sees the number. Subtracting a driver reserve calibrated against an NVIDIA card, or a second margin for a WDDM paging behaviour that does not exist here, would be counting the same headroom twice and would rule out configurations that fit.",

@@ -5,6 +5,8 @@
 *.cmd text eol=crlf
 *.bat text eol=crlf
 
-# macOS launchers must keep LF: zsh will not run a script with CRLF endings.
+# macOS and Linux launchers must keep LF: no shell will run a script whose
+# shebang line ends in CR.
 *.command text eol=lf
+*.sh text eol=lf
 *.zsh text eol=lf
