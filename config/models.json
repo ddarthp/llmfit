@@ -65,6 +65,16 @@
     "note": "Stable. No MTP: the GGUF carries no nextn_predict_layers."
   },
   "qwen38-27b": {
+    "speculative": {
+      "_comment": "Model-free speculative decoding, and it supersedes the mtp block below as the method this model actually runs. The mtp block is kept because its measurements are the reason this one exists. Embedded MTP was never a win here: measured on Metal at 8K it runs 0.86x on a copy-heavy prompt and 0.65x on one with nothing to copy, and at a 32K context with the vision encoder loaded 0.90x, all against a no-speculation baseline and all with byte-identical output. The damage shrinks as context grows but never crosses into gain, which is what the 0.99x already recorded at a true 32K prompt looks like from the other end of the same curve. It also costs about 805 MiB every time.",
+      "specType": "ngram-map-k",
+      "_specTypeComment": "Measured on Metal, temp 0, top_k 1, 200 predicted tokens. Against a 10.78 tok/s baseline at 8K: 13.59 tok/s on a copy-heavy prompt (1.26x) and 10.79 on a prompt with nothing to copy (1.00x). At a 32K context with the vision encoder loaded: 10.57 against 8.92 (1.18x). ngram-map-k4v ties it within noise. Resident memory is unchanged, 13017 MiB either way. This is the slowest model in the catalog, which is exactly where speculation should pay - and it does, just not through MTP.",
+      "_combinedComment": "--spec-type takes a comma-separated list, so the two were also measured together. draft-mtp,ngram-map-k gives 1.03x on the copy prompt and 0.65x on the fresh one: MTP drags the pair down to its own level. Do not combine them.",
+      "costMiB": 0,
+      "_costComment": "Zero, measured the same way it was on the 9B: resident memory is identical with and without it, 13017 MiB either way, because an ngram method loads no weights and downloads no companion file. It drafts from the tokens already in the context window.",
+      "autoEnable": true,
+      "_autoEnableComment": "On by default on both platforms, which is a change of posture from the mtp block. It is safe to default on precisely because it costs no memory: the worst case measured across every ngram variant was 0.93x, and this variant never fell below 1.00x. NOT MEASURED ON CUDA. Every number above is Metal. Enabling it there is an extrapolation from two facts - the cost is zero and the output is exact - plus the mechanism itself, which is a lookup over the context window rather than anything backend-specific. It is still an extrapolation. Measure it if a CUDA card is available, and note that MTP was never auto-enabled there anyway, so the comparison is against no speculation at all rather than against draft-mtp."
+    },
     "name": "Qwen 3.8 27B UD-Q3_K_XL",
     "alias": "qwen3.8-27b-q3",
     "_maxTokensComment": "Not published for this model; taken from Qwen 3.5, which is the same family and generation and states 32,768. A ceiling only, capped further by harness.maxOutputPercent.",
@@ -81,7 +91,7 @@
       "costMiB": 1200,
       "_costComment": "Measured on CUDA. Embedded MTP builds a draft context against the full model, so it costs far more than a small companion file: 13428 MiB without it, 14628 with, at 64K.",
       "macos": {
-        "autoEnable": true,
+        "autoEnable": false,
         "costMiB": 817,
         "_costComment": "Measured on a 24 GiB M4 Pro, Metal, with vision at 32K: 15717 MiB without, 16534 with. Cheaper than on CUDA, but do not trust it as a constant: it grows with context, because the draft context carries its own KV cache.",
         "maxContext": 32768,
