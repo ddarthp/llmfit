@@ -8,7 +8,7 @@ Ask for it in a terminal, or from [a web panel](#the-panel) built for a controll
 
 No install step, no build, no Git needed on the target machine. Copy the folder, run one command.
 
-> **Status:** Windows (CUDA / Vulkan / CPU), macOS on Apple Silicon (Metal) and Linux on x64 and arm64 (Vulkan / CPU), including SteamOS, where the panel goes in the Steam library as a non-Steam game. Overhead constants are calibrated on CUDA; on Metal and Linux they are borrowed for every model but one, and the launcher says so on screen.
+> **Status:** Windows (CUDA / Vulkan / CPU), macOS on Apple Silicon (Metal) and Linux on x64 and arm64 (Vulkan / CPU), including SteamOS on a 24 GB handheld, where the largest model in the catalog fits with vision and the panel goes in the Steam library as a non-Steam game. Overhead constants are calibrated on CUDA; on Metal and Linux they are borrowed for every model but one, and the launcher says so on screen.
 
 ---
 
@@ -70,6 +70,27 @@ Nothing else, and nothing installed. The harnesses (Pi, OpenCode, Codex) are opt
 Intel Macs are not supported: the catalog carries the `macos-arm64` build of `llama.cpp` only.
 
 **What Linux does not have yet.** There is no CUDA or ROCm backend in the catalog: an NVIDIA card runs through Vulkan here like any other, and ROCm is blocked by the runtime rather than by the catalog — see [what is different on Linux](#what-is-different-on-linux) for the measurements behind that. The overhead constants behind the estimated totals were measured on CUDA under Windows, so on Linux the KV column is exact while the estimated total is borrowed for every model except `qwen36-35b-a3b-mtp`, which was measured there. `config/server.json` carries a smaller safety margin on Linux than on Windows, because Linux fails an allocation that does not fit instead of quietly paging it into system RAM.
+
+### What your machine has to be
+
+The name of the GPU is the wrong question. The catalog's ceiling is **Qwen 3.6 35B-A3B at UD-Q3_K_XL** — a 16 GB file that holds around **17.3 GiB** resident with its vision encoder and a 32K `q8_0` cache, and **18.0 GiB** with the MTP draft context on top. Everything below follows from that number and from the measurements in [reference measurements](#reference-measurements):
+
+| What you have | Examples | The 35B-A3B Q3 |
+| --- | --- | --- |
+| 8–12 GB discrete | RTX 3060 12 GB, 4060 Ti, 5060 Ti, Arc A770 | No. Qwen 3.5 9B and Gemma 4 E4B / 12B are the range |
+| 16 GB discrete | RTX 4080, 5070 Ti, 5080 | No. The 27B Q3 with vision at 64K is the ceiling here, measured at 14564 MiB |
+| 24 GB+ discrete | RTX 3090, 4090, 5090 | Yes, with room left for vision, a draft context and a longer window |
+| 24 GB+ unified, **on Linux** | ROG Ally X, ROG Xbox Ally X (24 GB), Legion Go S (32 GB), any Ryzen APU desktop or mini-PC with 24 GB or more | Yes, and measured — see [what is different on Linux](#what-is-different-on-linux) |
+| 24 GB+ Apple Silicon | M1–M4 with 24 GB or more | Yes, against a budget of roughly 74 % of RAM — see [what is different on macOS](#what-is-different-on-macos) |
+
+A smaller machine is not shut out of anything: every model in the catalog is offered at whatever context actually fits it, and the fit table says so before you download a byte.
+
+**On a handheld, that row says *on Linux* on purpose.** A handheld has no dedicated VRAM — the GPU and the CPU share one pool — so how much of 24 GB a Vulkan process may actually hold is a driver and OS decision rather than a hardware one, and the two systems decide it differently:
+
+- **Linux and SteamOS** reach the amdgpu GTT pool. On the 24 GB Z1 Extreme this launcher was built on, Vulkan reports **19.6 GiB** and the 35B-A3B with its encoder takes 16.9 of it. It fits, it stays on the iGPU, and speculative decoding pays: **28.2 → 37.5–38.3 tok/s**.
+- **Windows** hands out the carve-out the BIOS or Armoury Crate sets, plus whatever WDDM will lend on top — and WDDM will not let one process keep the last of what it lent. It pages the excess into system RAM instead, with no error and no way for the launcher to see it, or the allocation fails outright. A configuration that runs on SteamOS can therefore crawl or die on the same handheld under Windows.
+
+So: a 24 GB handheld running SteamOS or any Linux distribution runs the largest model in this catalog with vision and 32K of context. The same handheld on Windows is a smaller machine, and the fit table will tell you how much smaller once the backend reports its budget.
 
 ---
 
@@ -689,6 +710,8 @@ The one place speculation is measured to pay is the MTP build of the 35B-A3B on 
 
 Three things, and the second is the one to read before trusting a number. Everything here was measured on a Ryzen Z1 Extreme running SteamOS — an RDNA3 integrated GPU, `gfx1103`, 24 GB of shared LPDDR5 — because that is the machine the Linux support was built on.
 
+That is a class rather than a single unit. The **ROG Ally X** is the same Z1 Extreme with the same 24 GB; the **ROG Xbox Ally X** pairs a newer RDNA3.5 iGPU with the same 24 GB and the same budget; a **Legion Go S with 32 GB** has more room again, and ships with SteamOS on some configurations. Any Ryzen APU desktop or mini-PC with 24 GB or more of system RAM lands in the same place. What they have in common is the thing that matters here: one pool of memory, and a Linux kernel willing to let a Vulkan process reach most of it.
+
 ### The catalog carries Vulkan and CPU only
 
 No CUDA build, no ROCm build. An NVIDIA card works, through Vulkan like every other GPU, which costs speed that a CUDA build would not. Adding one is a `backends.json` entry with a URL, a SHA-256 and the file and byte counts of the extracted tree — the same five fields every other backend has — and nothing in the launcher needs to change for it.
@@ -864,7 +887,7 @@ Every file `llmfit` touches is backed up next to the original as `.llmfit-backup
 
 ## Reference measurements
 
-Five of the seven catalog entries have been measured against `nvidia-smi` on a 16 GB NVIDIA card (an RTX 5070 Ti). **Every figure in this first part is CUDA**; the integrated-GPU sections below are separate measurements on their own hardware, and [what is different on macOS](#what-is-different-on-macos) covers Metal. A sample:
+Five of the seven catalog entries have been measured against `nvidia-smi` on a 16 GB NVIDIA card — the class a 4080, a 5070 Ti or a 5080 belongs to. A 24 GB card (3090, 4090) or a 32 GB one (5090) runs the same arithmetic with more room; what changes is the budget in step 1, not the constants below. **Every figure in this first part is CUDA**; the integrated-GPU sections below are separate measurements on their own hardware, and [what is different on macOS](#what-is-different-on-macos) covers Metal. A sample:
 
 | Configuration | Estimated | VRAM used | Generation |
 | --- | --- | --- | --- |
@@ -937,7 +960,7 @@ Loaded through `serve.ps1` at 48K with the device pinned, both models keep the d
 
 ### The same models on an RDNA3 handheld, on Linux
 
-A Ryzen Z1 Extreme running SteamOS: `gfx1103`, 24 GB of LPDDR5 shared with the CPU, through the Vulkan backend. This is where the Linux support was built and measured, and unlike the CUDA table above these are single runs rather than a calibration.
+A Ryzen Z1 Extreme running SteamOS: `gfx1103`, 24 GB of LPDDR5 shared with the CPU, through the Vulkan backend — a ROG Ally X, a ROG Xbox Ally X or a 32 GB Legion Go S is the same shape of machine. This is where the Linux support was built and measured, and unlike the CUDA table above these are single runs rather than a calibration.
 
 **The model this catalog cares most about fits, and speculation pays.** Qwen 3.6 35B-A3B from its MTP build, 32K with vision and a `q8_0` cache, everything on the iGPU:
 
@@ -1006,6 +1029,8 @@ The catalog is portable but the binaries are not: a folder carried from Windows 
 **A large download was interrupted.** Run `llmfit` again. It validates by SHA-256, not by file existence: a partial file is resumed, and if it still does not match it is re-downloaded clean. Nothing to delete by hand.
 
 **My GPU is not detected.** Set `LLMFIT_DEBUG=1` to see the raw `llama-server --list-devices` output per backend.
+
+**A 24 GB handheld fits far less than 24 GB, or a model that loaded on SteamOS fails to allocate on Windows.** Shared memory is not a single number the hardware decides. Under Linux a Vulkan process reaches the amdgpu GTT pool and sees most of the machine — 19.6 GiB of 24 on the Z1 Extreme measured here. Under Windows it sees the carve-out the BIOS or Armoury Crate sets plus what WDDM lends, and WDDM pages the last of that into system RAM rather than refusing it, so the symptom is either an allocation failure or a load that "succeeds" and then generates at a few tokens per second. Raise the graphics-memory setting in the BIOS or Armoury Crate if the vendor exposes one, drop vision or shorten the context to fit what the backend actually reports — or run SteamOS or another Linux distribution, which is what [what is different on Linux](#what-is-different-on-linux) was measured on.
 
 **It says TIGHT and I want headroom.** Lower `cacheType` to `q4_0` in `config/server.json`, or pick the no-vision variant.
 
