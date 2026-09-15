@@ -10,3 +10,13 @@
 *.command text eol=lf
 *.sh text eol=lf
 *.zsh text eol=lf
+
+# The panel is served as-is; CRLF in the JavaScript would work but the diffs
+# would not.
+*.js text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+
+# Artwork for the Steam library entry. Marked binary explicitly rather than
+# left to text=auto's guess, because a mangled PNG fails silently.
+*.png binary

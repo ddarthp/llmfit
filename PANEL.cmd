@@ -1,0 +1,2 @@
+@echo off
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~dp0tools\pwsh\pwsh.exe' -ArgumentList '-NoProfile','-File','%~dp0ui.ps1' -WindowStyle Minimized -ErrorAction SilentlyContinue; if ($LASTEXITCODE) { Start-Process powershell -ArgumentList '-NoProfile','-File','%~dp0ui.ps1' -WindowStyle Minimized }; Start-Sleep -Seconds 3; Start-Process 'http://127.0.0.1:8089'"

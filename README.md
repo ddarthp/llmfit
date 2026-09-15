@@ -23,6 +23,7 @@ No install step, no build, no Git needed on the target machine. Copy the folder,
 - [Configuration](#configuration)
 - [What is different on macOS](#what-is-different-on-macos)
 - [What is different on Linux](#what-is-different-on-linux)
+- [The panel](#the-panel)
 - [Just chatting](#just-chatting)
 - [On your network](#on-your-network)
 - [Using it from your editor](#using-it-from-your-editor)
@@ -330,6 +331,8 @@ Open whatever folder you want to work in, paste, done. The server stays in its o
 | `INSTALL-PATH.cmd` | `INSTALL-PATH.command` | `INSTALL-PATH.sh` | Puts the launcher on your `PATH`. Run once, no admin rights |
 | `VERIFY.cmd` | `VERIFY.command` | `VERIFY.sh` | Checks the integrity of everything installed |
 | `CLEAN.cmd` | `CLEAN.command` | `CLEAN.sh` | Deletes already-extracted archives to reclaim disk |
+| `PANEL.cmd` | `PANEL.command` | `PANEL.sh` | The same five steps as a web page, for a controller or a phone. See [the panel](#the-panel) |
+| — | — | `add-to-steam.ps1` | Puts `PANEL.sh` in the Steam library as a non-Steam game, artwork included |
 
 On Windows the PATH installer adds `bin\`, `tools\node` and Pi to the user `PATH` through the registry. On macOS and Linux it writes a marked block adding `bin/` only, into `~/.zshrc` under zsh and into `~/.bash_profile` (macOS) or `~/.bashrc` (Linux) under bash — which file bash reads is not the same on the two, since a macOS terminal opens a login shell and a Linux one does not. `tools/node` and `tools/pi` are runtimes a Windows package vendors so an offline machine can still run Pi; everywhere else Pi is an npm install like any other. The file is backed up as `.llmfit-backup` before the first write and re-running only rewrites the block.
 
@@ -340,6 +343,8 @@ On Windows the PATH installer adds `bin\`, `tools\node` and Pi to the user `PATH
 | `llmfit.ps1` | `-Help` | The launcher itself |
 | `serve.ps1` | `-ModelKey` `-Backend` `-Context` `-CacheType` `-Device` `-Vision` `-Spec` | Starts `llama-server` directly, no menus. `-Spec` was called `-Mtp` while draft weights were the only method here, and that name still works as an alias |
 | `verify.ps1` | `-Full` | Integrity check. `-Full` requires the whole catalog |
+| `ui.ps1` | `-Port` `-WhereIsIt` | Serves the panel. `-WhereIsIt` prints the addresses and exits, which is how the launchers know where to point a browser |
+| `fetch.ps1` | `-ModelKey` `-Vision` `-Spec` `-Backend` `-ProgressPath` | Downloads and verifies a configuration without loading it. Useful on its own before a trip |
 | `clean.ps1` | `-IncludeLogs` `-Force` | Reclaim disk. `-Force` skips the confirmation |
 | `install-path.ps1` | — | `PATH` setup |
 
@@ -385,7 +390,9 @@ pkill -x llama-server
 
 ## What is in this repository
 
-Plain text: five PowerShell scripts, the harness definitions and the macOS and Linux bootstraps in `lib/`, five JSON files in `config/`, and the `.cmd`, `.command` and `.sh` wrappers that make them double-clickable on each system. Nothing is generated and nothing is vendored.
+Plain text: seven PowerShell scripts, the shared libraries in `lib/`, five JSON files in `config/`, three files in `ui/` for the panel, and the `.cmd`, `.command` and `.sh` wrappers that make them double-clickable on each system. Nothing is generated, nothing is vendored, and there is no build step: the panel ships the JavaScript the browser runs.
+
+`lib/` is what more than one front end needs: `config.ps1` reads the catalog the same way everywhere, `fit.ps1` holds the arithmetic and returns data without printing any of it, `artifacts.ps1` downloads and verifies, `net.ps1` answers "which address", and `harness.ps1` knows about Pi, OpenCode and Codex.
 
 The launcher itself is one codebase. `lib/bootstrap.zsh` and `lib/bootstrap.sh` are the only part written more than once, and they duplicate no logic: they exist solely to put a PowerShell on the machine and hand over. They are separate files because zsh is the shell macOS ships and bash is the one every distro ships, which is the whole of the difference between them.
 
@@ -651,6 +658,40 @@ No install, no Docker, no extra process. It handles conversations, system prompt
 That URL is printed at the end of every run whatever harness you chose, because the UI is up regardless.
 
 Want chat history synced across devices, document search or multiple users? Point **Open WebUI** or any other OpenAI-compatible front end at `http://127.0.0.1:8088/v1` with any value as the API key. `llmfit` does not bundle one: they need Docker or a Python environment, which is exactly the install step this project exists to avoid.
+
+---
+
+## The panel
+
+The launcher is a terminal wizard, which is the wrong shape for a machine you drive from the sofa with a controller. `PANEL.sh` (`PANEL.command` on macOS, `PANEL.cmd` on Windows) serves the same five steps as a web page instead:
+
+```bash
+./PANEL.sh
+```
+
+It starts the panel, works out which session it is in, and opens it — Steam's built-in browser under Gaming Mode, Firefox in kiosk mode on the desktop. The page is plain HTML, CSS and JavaScript with no framework and no CDN, because the machine it runs on may have no network left once the weights are down.
+
+**Put it in your Steam library**, with one command rather than six clicks:
+
+```bash
+./tools/pwsh/pwsh -File add-to-steam.ps1
+```
+
+It writes a non-Steam shortcut pointing at `PANEL.sh`, with library artwork. Run it again and it replaces its own entry rather than adding a second; `-Remove` takes it out again.
+
+Two things it insists on. It **refuses while Steam is running**, because Steam keeps its own copy of `shortcuts.vdf` in memory and writes it back on exit — an edit made underneath a live Steam is discarded with no error at all. And it **backs the file up once** before the first write, the same `.llmfit-backup` convention the harness configuration uses. `shortcuts.vdf` is Valve's binary key-value format, so the script parses and re-emits the whole file; the round trip was checked byte for byte against a real 47-entry library before it was allowed to write anything.
+
+The manual route still works if you prefer it: Desktop Mode → Steam → Games → *Add a Non-Steam Game* → Browse → pick `PANEL.sh`.
+
+Either way it then launches from Gaming Mode like any other entry, and the thumbstick drives the cursor across the tiles. Touch works directly, and arrow keys with Enter and Escape work wherever a keyboard or a Steam Input layout provides them. A gamepad that reaches the page through the Gamepad API drives it too: D-pad to move, **A** to select, **B** to go back.
+
+**It shows the same numbers as the terminal.** Backend and budget, every model with what it weighs, the KV cache type, the fit table with `FITS` / `TIGHT` / `TOO BIG` per context length, and whether speculative decoding is on with the sentence that says why. That is not a reimplementation: `lib/fit.ps1` computes it once and both front ends print what it returns. A fit table nobody can trust is the thing this project exists to replace, and two of them would be worse than none.
+
+Downloads happen in the panel too, with a progress bar per file — the catalog now carries each file's size, so the bar is real rather than a spinner, and the SHA-256 still decides when a file is done. You can watch a 16 GB download from your phone while the Deck sits on the dock.
+
+The panel listens on its own port (`uiPort` in `config/server.json`, 8089 by default) because it has to answer while `llama-server` is loading, restarting or stopped. It binds the same host as the API, so it is reachable from the same devices — read [On your network](#on-your-network) before opening either to a network you do not control.
+
+Stop it with `pkill -f ui.ps1`. Stopping the panel does not stop a model: the server is detached and outlives it.
 
 ---
 

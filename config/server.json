@@ -1,5 +1,7 @@
 {
   "_portComment": "8080 was the default and it is not free on every machine: on SteamOS the Steam client's steamwebhelper already listens on 127.0.0.1:8080, and a wildcard bind over it fails with 'couldn't bind HTTP server socket, hostname: 0.0.0.0, port: 8080'. 8088 was free here. Any port works - this one is only a default that collides with less.",
+  "_uiPortComment": "The web panel listens here, and it is deliberately not the model's port: the panel has to answer while llama-server is loading, restarting or stopped, so it cannot share a socket with it. Same host as above, so the panel is reachable from the phone on the same terms as the API.",
+  "uiPort": 8089,
   "host": "0.0.0.0",
   "port": 8088,
   "_platformsComment": "What --list-devices reports as 'total' does not mean the same thing on both platforms, so the constants that turn it into a budget cannot be shared. On Windows it is the raw dedicated VRAM of the card, with nothing held back. On Metal it is already recommendedMaxWorkingSetSize, the figure macOS itself recommends a process stay under.",
