@@ -3,6 +3,7 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 # Windows PowerShell 5.1 defines neither, and only ever runs on Windows. See llmfit.ps1.
 $onWindows = if ($null -ne $IsWindows) { [bool]$IsWindows } else { $true }
+$onLinux = if ($null -ne $IsLinux) { [bool]$IsLinux } else { $false }
 
 if ($onWindows) {
   # The 'User' environment target is the Windows registry. There is no such
@@ -26,17 +27,22 @@ if ($onWindows) {
   exit 0
 }
 
-# ------------------------------------------------------------------- macOS
+# ------------------------------------------------------------ macOS and Linux
 
 # Only bin/ goes on the PATH here. tools/node and tools/pi are runtimes a
-# Windows package vendors so an offline machine can still run Pi; on macOS Pi
-# is an npm install like any other tool and is already wherever npm put it.
+# Windows package vendors so an offline machine can still run Pi; everywhere
+# else Pi is an npm install like any other tool and is already wherever npm
+# put it.
 $binDirectory = Join-Path $root 'bin'
 
-$shell = if ($env:SHELL) { Split-Path -Leaf $env:SHELL } else { 'zsh' }
+$shell = if ($env:SHELL) { Split-Path -Leaf $env:SHELL } else { if ($onLinux) { 'bash' } else { 'zsh' } }
+# Which file bash reads is not a detail: macOS Terminal opens login shells, so
+# .bash_profile is the one that runs, while a Linux terminal opens interactive
+# non-login shells and reads .bashrc instead. Writing to the wrong one leaves a
+# PATH entry that never takes effect and no error to explain why.
 $profilePath = switch ($shell) {
   'zsh' { Join-Path $HOME '.zshrc' }
-  'bash' { Join-Path $HOME '.bash_profile' }
+  'bash' { if ($onLinux) { Join-Path $HOME '.bashrc' } else { Join-Path $HOME '.bash_profile' } }
   default { $null }
 }
 if (-not $profilePath) {
@@ -73,4 +79,4 @@ Write-Host "  written to: $profilePath" -ForegroundColor DarkGray
 Write-Host ''
 Write-Host 'Installed for the current user.' -ForegroundColor Green
 Write-Host 'Open a new terminal and run: llmfit' -ForegroundColor Cyan
-Write-Host 'You can also use START.command without touching PATH.'
+Write-Host "You can also use $(if ($onLinux) { 'START.sh' } else { 'START.command' }) without touching PATH."

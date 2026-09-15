@@ -10,10 +10,13 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $configDirectory = Join-Path $root 'config'
 
-# Windows PowerShell 5.1 defines neither, and only ever runs on Windows. See llmfit.ps1.
+# Windows PowerShell 5.1 defines none of them, and only ever runs on Windows. See llmfit.ps1.
 $onWindows = if ($null -ne $IsWindows) { [bool]$IsWindows } else { $true }
 $onMacOS = if ($null -ne $IsMacOS) { [bool]$IsMacOS } else { $false }
-$platform = if ($onMacOS) { 'macos' } else { 'windows' }
+$onLinux = if ($null -ne $IsLinux) { [bool]$IsLinux } else { $false }
+$platform = if ($onMacOS) { 'macos' } elseif ($onLinux) { 'linux' } else { 'windows' }
+# Linux ships here for two architectures; see llmfit.ps1.
+$architecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
 $serverExe = if ($onWindows) { 'llama-server.exe' } else { 'llama-server' }
 $models = Get-Content -Raw -LiteralPath (Join-Path $configDirectory 'models.json') | ConvertFrom-Json
 $backends = Get-Content -Raw -LiteralPath (Join-Path $configDirectory 'backends.json') | ConvertFrom-Json
@@ -85,9 +88,11 @@ foreach ($property in $backends.PSObject.Properties) {
   # Keys starting with '_' are documentation, not backends.
   if ($property.Name.StartsWith('_')) { continue }
   $backend = $property.Value
-  # A CUDA package on a Mac is not missing, it is irrelevant. Reporting it as a
-  # problem would make a healthy install look broken on both platforms.
+  # A CUDA package on a Mac is not missing, it is irrelevant, and neither is an
+  # x64 build on an aarch64 board. Reporting either as a problem would make a
+  # healthy install look broken.
   if ($backend.platform -ne $platform) { continue }
+  if ($backend.architecture -and $backend.architecture -ne $architecture) { continue }
   $folder = Join-Path (Join-Path $root 'tools') $backend.folder
   $installed = Test-Path -LiteralPath (Join-Path $folder $serverExe)
 

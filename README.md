@@ -6,7 +6,7 @@
 
 No install step, no build, no Git needed on the target machine. Copy the folder, run one command.
 
-> **Status:** Windows (CUDA / Vulkan / CPU) and macOS on Apple Silicon (Metal). Linux is on the roadmap.
+> **Status:** Windows (CUDA / Vulkan / CPU), macOS on Apple Silicon (Metal) and Linux on x64 and arm64 (Vulkan / CPU). The Linux fit table borrows the Windows overhead constants; see [Requirements](#requirements).
 
 ---
 
@@ -22,7 +22,9 @@ No install step, no build, no Git needed on the target machine. Copy the folder,
 - [Models](#models)
 - [Configuration](#configuration)
 - [What is different on macOS](#what-is-different-on-macos)
+- [What is different on Linux](#what-is-different-on-linux)
 - [Just chatting](#just-chatting)
+- [On your network](#on-your-network)
 - [Using it from your editor](#using-it-from-your-editor)
 - [Reference measurements](#reference-measurements)
 - [Moving the package to another machine](#moving-the-package-to-another-machine)
@@ -49,19 +51,21 @@ The result is a fit table you can trust *before* you wait three minutes for a 13
 
 ## Requirements
 
-| | Windows | macOS |
-| --- | --- | --- |
-| OS | Windows 10 / 11 (x64) | macOS on Apple Silicon (M1–M4) |
-| Runtime | PowerShell 5.1, the one bundled with Windows | zsh, and PowerShell 7 downloaded on first run |
-| GPU | Optional. NVIDIA via CUDA, AMD/Intel via Vulkan, or CPU only | Metal, always present |
-| Disk | 4.2 GB for the smallest model without vision, ~69 GB for the whole catalog | the same, plus 183 MB for PowerShell |
-| Network | Only on first run, to download the model and the backend | the same |
+| | Windows | macOS | Linux |
+| --- | --- | --- | --- |
+| OS | Windows 10 / 11 (x64) | macOS on Apple Silicon (M1–M4) | any distro, x64 or arm64 |
+| Runtime | PowerShell 5.1, the one bundled with Windows | zsh, and PowerShell 7 downloaded on first run | bash, `curl`, `tar`, `jq`, and PowerShell 7 downloaded on first run |
+| GPU | Optional. NVIDIA via CUDA, AMD/Intel via Vulkan, or CPU only | Metal, always present | Optional. AMD/Intel/NVIDIA via Vulkan, or CPU only |
+| Disk | 4.2 GB for the smallest model without vision, ~69 GB for the whole catalog | the same, plus 183 MB for PowerShell | the same, plus 170 MB for PowerShell |
+| Network | Only on first run, to download the model and the backend | the same | the same |
 
 Nothing else, and nothing installed. The harnesses (Pi, OpenCode, Codex) are optional: without one, `llmfit` still runs the server and you point anything OpenAI-compatible at it.
 
-**On macOS the launcher needs PowerShell, and it fetches its own.** There is no runtime both systems ship — Windows has no shell, macOS has no PowerShell — so the alternative was maintaining the fit arithmetic twice and letting two implementations drift apart. Instead `llmfit` stays one codebase and treats PowerShell as one more dependency: downloaded, checked against its SHA-256, extracted into `tools/pwsh`, never installed. Nothing is written outside the folder, no Homebrew, no admin rights. A `pwsh` already on your `PATH` is used as is and nothing is downloaded.
+**On macOS and Linux the launcher needs PowerShell, and it fetches its own.** There is no runtime all three systems ship — Windows has no shell, macOS and a stock Linux have no PowerShell — so the alternative was maintaining the fit arithmetic three times and letting the implementations drift apart. Instead `llmfit` stays one codebase and treats PowerShell as one more dependency: downloaded, checked against its SHA-256, extracted into `tools/pwsh`, never installed. Nothing is written outside the folder, no Homebrew, no `apt`, no admin rights. A `pwsh` already on your `PATH` is used as is and nothing is downloaded.
 
 Intel Macs are not supported: the catalog carries the `macos-arm64` build of `llama.cpp` only.
+
+**What Linux does not have yet.** There is no CUDA or ROCm backend in the catalog: an NVIDIA card runs through Vulkan here like any other. And the overhead constants behind the estimated totals were measured on CUDA under Windows, so on Linux the KV column is still exact while the estimated total is borrowed — the launcher says so on screen. `config/server.json` carries a smaller safety margin there than on Windows, because Linux fails an allocation that does not fit instead of quietly paging it into system RAM.
 
 ---
 
@@ -85,9 +89,17 @@ cd llmfit
 
 `START.command` is also double-clickable from Finder.
 
-On first run it downloads the backend and the model you pick, verifying both by SHA-256. On macOS it fetches PowerShell first, the same way.
+**Linux**
 
-To get a global `llmfit` command, run `INSTALL-PATH.cmd` (Windows) or `INSTALL-PATH.command` (macOS) once and open a new terminal.
+```bash
+git clone https://github.com/ddarthp/llmfit.git
+cd llmfit
+./START.sh
+```
+
+On first run it downloads the backend and the model you pick, verifying both by SHA-256. On macOS and Linux it fetches PowerShell first, the same way.
+
+To get a global `llmfit` command, run `INSTALL-PATH.cmd` (Windows), `INSTALL-PATH.command` (macOS) or `INSTALL-PATH.sh` (Linux) once and open a new terminal.
 
 ---
 
@@ -311,15 +323,15 @@ Open whatever folder you want to work in, paste, done. The server stays in its o
 
 ### Entry points
 
-| Windows | macOS | What it does |
-| --- | --- | --- |
-| `llmfit` | `llmfit` | The interactive launcher. Available globally after the PATH installer |
-| `START.cmd` | `START.command` | Same launcher, without touching `PATH`. Double-click friendly |
-| `INSTALL-PATH.cmd` | `INSTALL-PATH.command` | Puts the launcher on your `PATH`. Run once, no admin rights |
-| `VERIFY.cmd` | `VERIFY.command` | Checks the integrity of everything installed |
-| `CLEAN.cmd` | `CLEAN.command` | Deletes already-extracted archives to reclaim disk |
+| Windows | macOS | Linux | What it does |
+| --- | --- | --- | --- |
+| `llmfit` | `llmfit` | `llmfit` | The interactive launcher. Available globally after the PATH installer |
+| `START.cmd` | `START.command` | `START.sh` | Same launcher, without touching `PATH`. Double-click friendly |
+| `INSTALL-PATH.cmd` | `INSTALL-PATH.command` | `INSTALL-PATH.sh` | Puts the launcher on your `PATH`. Run once, no admin rights |
+| `VERIFY.cmd` | `VERIFY.command` | `VERIFY.sh` | Checks the integrity of everything installed |
+| `CLEAN.cmd` | `CLEAN.command` | `CLEAN.sh` | Deletes already-extracted archives to reclaim disk |
 
-On Windows the PATH installer adds `bin\`, `tools\node` and Pi to the user `PATH` through the registry. On macOS it writes a marked block into `~/.zshrc` (or `~/.bash_profile`) adding `bin/` only — `tools/node` and `tools/pi` are runtimes a Windows package vendors so an offline machine can still run Pi, and on macOS Pi is an npm install like any other. The file is backed up as `.llmfit-backup` before the first write and re-running only rewrites the block.
+On Windows the PATH installer adds `bin\`, `tools\node` and Pi to the user `PATH` through the registry. On macOS and Linux it writes a marked block adding `bin/` only, into `~/.zshrc` under zsh and into `~/.bash_profile` (macOS) or `~/.bashrc` (Linux) under bash — which file bash reads is not the same on the two, since a macOS terminal opens a login shell and a Linux one does not. `tools/node` and `tools/pi` are runtimes a Windows package vendors so an offline machine can still run Pi; everywhere else Pi is an npm install like any other. The file is backed up as `.llmfit-backup` before the first write and re-running only rewrites the block.
 
 ### PowerShell scripts
 
@@ -373,9 +385,9 @@ pkill -x llama-server
 
 ## What is in this repository
 
-Plain text: five PowerShell scripts, the harness definitions and the macOS bootstrap in `lib/`, five JSON files in `config/`, and the `.cmd` and `.command` wrappers that make them double-clickable on each system. Nothing is generated and nothing is vendored.
+Plain text: five PowerShell scripts, the harness definitions and the macOS and Linux bootstraps in `lib/`, five JSON files in `config/`, and the `.cmd`, `.command` and `.sh` wrappers that make them double-clickable on each system. Nothing is generated and nothing is vendored.
 
-The launcher itself is one codebase. `lib/bootstrap.zsh` is the only part written twice over, and it does not duplicate any logic: it exists solely to put a PowerShell on the machine and hand over.
+The launcher itself is one codebase. `lib/bootstrap.zsh` and `lib/bootstrap.sh` are the only part written more than once, and they duplicate no logic: they exist solely to put a PowerShell on the machine and hand over. They are separate files because zsh is the shell macOS ships and bash is the one every distro ships, which is the whole of the difference between them.
 
 ## What is *not* in this repository
 
@@ -410,10 +422,11 @@ Model weights belong to their respective publishers under their own licenses.
 | Qwen 3.8 27B UD-Q3_K_XL | `qwen3.8-27b-q3` | 13.15 GB | 885 MB | 8.0 GiB | 256K | embedded |
 | Gemma 4 26B-A4B QAT | `gemma4-26b-a4b-qat` | 14.25 GB | 1.19 GB | 2.7 GiB | 256K | draft model |
 | Qwen 3.6 35B-A3B UD-Q3_K_XL | `qwen3.6-35b-a3b-q3` | 16.85 GB | 899 MB | 2.5 GiB | 256K | separate build |
+| Qwen 3.6 35B-A3B UD-Q3_K_XL (MTP) | `qwen3.6-35b-a3b-q3-mtp` | 17.23 GB | 899 MB | 2.5 GiB | 256K | embedded |
 
 The middle column is the name your harness needs — see [using it from your editor](#using-it-from-your-editor). `config/models.json` keys them slightly differently (`gemma4-e4b` rather than `gemma4-e4b-qat`); the key is only for `serve.ps1 -ModelKey`.
 
-All of them are Unsloth quantizations with an optional vision encoder. **KV figures are at `f16`**, so they are 3.2× the `q4_1` numbers an earlier revision of this table carried — the default changed and the table did not follow it. The 35B-A3B is the one model that ships with a quantized cache, and only on macOS; see below. The whole catalog, weights plus encoders plus draft models, is about 69 GB on disk — you only ever download what you pick.
+All of them are Unsloth quantizations with an optional vision encoder. **KV figures are at `f16`**, so they are 3.2× the `q4_1` numbers an earlier revision of this table carried — the default changed and the table did not follow it. The two 35B-A3B entries are the ones that ship with a quantized cache — on macOS for both, and on Linux for the MTP build, where it is measured; see below. The whole catalog, weights plus encoders plus draft models, is about 69 GB on disk — you only ever download what you pick.
 
 ### A model can pick its own KV cache type
 
@@ -444,6 +457,7 @@ Two things worth reading off that table:
 
 - **The 35B-A3B is the largest model here and has a cheaper cache than the 27B.** It is both a mixture of experts (8 of 256 active, all 256 resident) and a hybrid attention/SSM, and it holds two KV heads per attention layer where the 9B and 27B hold four. Ten of its forty layers keep a cache, at 10240 elements per token against the 27B's 32768. Weights are what costs you here, not context.
 - **The 26B-A4B has the heaviest Gemma weights and the lightest KV cache.** It is a mixture of experts: 8 of 128 experts run per token but all 128 must be resident, so you pay the full 14.25 GB for weights while its 5 context-scaling layers keep the cache tiny. On a 16 GB card it fits with vision at 64K, with about 350 MiB to spare.
+- **The MTP build is the same model with its nextn layer, and it is the only entry whose speculative decoding was measured to be worth turning on.** Qwen publishes MTP for this model as a separate 17.23 GB file rather than as layers inside the standard one, which is why it is a second entry rather than a step-4 toggle. Its extra 41st block costs nothing in the target cache — llama.cpp still reports 10 cache-holding layers and 340 MiB at 32K with `q8_0` — and the draft context it builds costs a measured 801 MiB at that length. What it buys was measured on Vulkan/gfx1103 at 32K with vision: 28.2–28.6 tok/s without, 37.5–38.3 with, acceptance 0.71–0.73. See [what is different on Linux](#what-is-different-on-linux).
 - **The E4B's KV figure is measured, not derived.** Its header implies 1.10 GiB at 128K; the card says 0.64 GiB. `shared_kv_layers = 18` is the reason, and the header never says which layers share, so the catalog carries the measured coefficient.
 
 To add your own model, put an entry in `config/models.json` with its URL, SHA-256 and the two KV coefficients derived from its GGUF header. Every existing entry records its derivation — and, where measurement disagreed with the header, what was measured and why — in a `detail` block.
@@ -523,11 +537,11 @@ Only Qwen 3.5 publishes a figure to cap against, *"Adequate Output Length: 32,76
 
 ## What is different on macOS
 
-Everything above works the same way on both systems, with three exceptions worth knowing before you rely on the numbers.
+Everything above works the same way on every system, with three exceptions worth knowing before you rely on the numbers. The first of them applies to Linux too.
 
 ### The server has no window of its own
 
-On Windows the server opens its own console and stays there. macOS has no equivalent short of driving Terminal through AppleScript, which raises a permission prompt you can refuse, so the server is detached instead and writes to a log next to the launcher:
+On Windows the server opens its own console and stays there. Neither macOS nor Linux has an equivalent that works without assuming a particular desktop or raising a permission prompt you can refuse, so the server is detached instead and writes to a log next to the launcher:
 
 ```zsh
 tail -f llama-server.log        # what the server is printing
@@ -598,19 +612,78 @@ Loading successfully is not proof that a configuration fits on Metal. Until the 
 
 ---
 
+## What is different on Linux
+
+Two things, and the second is the one to read before trusting a number.
+
+### The catalog carries Vulkan and CPU only
+
+No CUDA build, no ROCm build. An NVIDIA card works, through Vulkan like every other GPU, which costs speed that a CUDA build would not. Adding one is a `backends.json` entry with a URL, a SHA-256 and the file and byte counts of the extracted tree — the same five fields every other backend has — and nothing in the launcher needs to change for it.
+
+Speculative decoding **is** on for the Linux Vulkan backend, and unlike everywhere else in this catalog it was measured to pay. Qwen 3.6 35B-A3B from its MTP build, 32K with vision and a q8_0 cache on a gfx1103 iGPU: **28.2–28.6 tok/s without, 37.5–38.3 with**, at draft acceptance 0.71–0.73 and mean draft length 3.1. That is 1.33x, above the 1.15–1.25x the vendor claims for MoE models.
+
+That clearance is for *embedded* draft layers only. The Windows measurement on this same backend still stands for a **companion draft file**: on `b10566` Gemma 4 E4B aborts during KV allocation, `pre-allocated tensor (cache_k_l22) in a buffer (Vulkan0) that cannot run the operation (NONE)` — Gemma 4's shared-KV layers meeting a Vulkan buffer with no kernel for them. Nobody has run that path on Linux, and the Gemma entries are the ones that use it.
+
+### The fit table is calibrated for exactly one model so far
+
+The KV column comes from the GGUF header and is exact everywhere. The per-model overhead constants behind the *estimated total* were measured against `nvidia-smi` on CUDA under Windows, so on Linux they are borrowed — and the launcher says so on screen — for every entry except one.
+
+`qwen36-35b-a3b-mtp` carries a measured `overhead.linux` block: `baseMiB -205`, `visionMiB 251`, taken on Vulkan/gfx1103 at 32K with a q8_0 cache by sampling `mem_info_vram_used + mem_info_gtt_used` against an idle baseline. Without vision the process holds 16564 MiB against 16429 of weights and 340 of cache; with vision, 17673. The base term is negative because llama.cpp keeps 515 MiB of that file in a `Vulkan_Host` buffer and only 15499 reaches the device. Do the same for another model and its warning goes away too.
+
+**A quantized KV cache is cheap here.** The 84x prompt collapse that CUDA suffers — flash attention has no quantized-KV kernel there and attention falls off the GPU — does not happen on Vulkan. Measured with Gemma 4 E4B, `llama-bench`: f16 gives pp512 353.3 and tg128 31.9 tok/s, q8_0 gives 329.3 and 31.0. Seven percent of prompt processing and three of generation, which is what makes a 16 GB model fit next to its vision encoder on a 24 GB machine.
+
+The safety margin is smaller here than on Windows — 5% against 10%, in `config/server.json`. Windows holds back that slice because WDDM will not let one process keep all of the dedicated VRAM and quietly pages the excess into system RAM, where nothing reports an error and generation just crawls. Linux fails an allocation that does not fit instead, loudly. What is left to guard against is the memory the desktop compositor holds and the launcher cannot see, which is real and much smaller; on a headless machine you can set it to 0.
+
+The device reserve, on the other hand, is still the Windows figure carried over, and the comment beside it in `config/server.json` says so. Measuring it against `nvidia-smi` on a Linux card is the way to replace it.
+
+---
+
 ## Just chatting
 
 If you only want to talk to the model, pick **Browser** and `llmfit` opens it for you. `llama.cpp` compiles a chat UI into the server itself, so it is already running at:
 
 ```
-http://127.0.0.1:8080
+http://127.0.0.1:8088
 ```
 
 No install, no Docker, no extra process. It handles conversations, system prompts, sampling settings, and file attachments — with a vision model loaded the server advertises image, video and audio input, and the UI exposes them. It ships a web manifest too, so your browser can install it as a standalone app.
 
 That URL is printed at the end of every run whatever harness you chose, because the UI is up regardless.
 
-Want chat history synced across devices, document search or multiple users? Point **Open WebUI** or any other OpenAI-compatible front end at `http://127.0.0.1:8080/v1` with any value as the API key. `llmfit` does not bundle one: they need Docker or a Python environment, which is exactly the install step this project exists to avoid.
+Want chat history synced across devices, document search or multiple users? Point **Open WebUI** or any other OpenAI-compatible front end at `http://127.0.0.1:8088/v1` with any value as the API key. `llmfit` does not bundle one: they need Docker or a Python environment, which is exactly the install step this project exists to avoid.
+
+---
+
+## On your network
+
+The server listens on every interface, so the model you just loaded is available to every device in the house — phone, laptop, the machine you actually work on. The launcher prints the address at the end of a run:
+
+```
+  API       : http://127.0.0.1:8088/v1
+  Chat UI   : http://127.0.0.1:8088  (built into llama.cpp, always available)
+  LAN       : http://192.168.1.3:8088  - same paths, from any device on this network
+              API http://192.168.1.3:8088/v1
+              or http://steamdeck.local:8088 wherever mDNS resolves
+```
+
+Open that chat UI address on a phone and you are talking to the model on your desktop, with no app and no account.
+
+**Bind address and connect address are not the same string.** `config/server.json` sets `host`, which is what `llama-server` binds to, and `0.0.0.0` there means *every interface*. It is not an address anything can connect to: Windows refuses it outright, and on macOS and Linux it only works by falling through to the loopback. So the launcher binds with what the config says, talks to `127.0.0.1` itself, writes that into your harness configuration, and works out the LAN address separately.
+
+**Which address, on a machine that has several.** A laptop with Docker, a VPN and wifi has three equally plausible addresses and no way to tell them apart by name. `lib/net.ps1` asks the routing table instead: a UDP socket *connected* to `192.0.2.1` sends no packets — the address is reserved for documentation and routed nowhere — it only makes the OS pick a route, and the socket's local endpoint is then the address the LAN would see. That one is printed first; the rest are listed as also listening, named by interface, because a wildcard bind really did open them.
+
+The `.local` name appears only where something answers for it: always on macOS, on Linux when Avahi is running, never on Windows, which ships no mDNS responder.
+
+**To keep it to this machine**, set `"host": "127.0.0.1"` in `config/server.json`. The summary then says so rather than printing an address that does not work:
+
+```
+  LAN       : not reachable - bound to 127.0.0.1 only.
+              Set "host": "0.0.0.0" in config/server.json to open it to this network.
+```
+
+**There is no authentication.** `llama-server` takes any string as an API key and checks none of it, so on `0.0.0.0` anyone who can reach the port can use your model, read the prompts in flight and load the machine. That is fine on a home network you control and wrong on a café's wifi. This is a local inference server, not a service: do not port-forward it, and use the loopback bind when you are somewhere you do not trust.
+
+**The port is 8088 and not 8080 on purpose.** 8080 is the `llama.cpp` default and it is not free everywhere: on SteamOS the Steam client's `steamwebhelper` already holds `127.0.0.1:8080`, and a wildcard bind over it fails with `couldn't bind HTTP server socket, hostname: 0.0.0.0, port: 8080`. Any free port works; change `port` in `config/server.json` and the harness configuration follows on the next run.
 
 ---
 
@@ -637,7 +710,7 @@ Codex takes no model name: `llmfit` writes the model into the `llama-local` prof
 Three things worth knowing:
 
 - **The name has to match what the server loaded.** One model is served at a time; asking for a different one will not switch it. Re-run `llmfit` to load another.
-- **Run it in any folder.** The harness talks to `http://127.0.0.1:8080`, so start it wherever your code lives.
+- **Run it in any folder.** The harness talks to `http://127.0.0.1:8088`, so start it wherever your code lives.
 - **The server outlives your session.** Close the harness and open it again without paying the load time twice.
 
 ### It leaves your defaults alone
@@ -746,8 +819,8 @@ powershell -ExecutionPolicy Bypass -File verify.ps1 -Full   # require the whole 
 
 1. Copy the whole folder to the stick. A full catalog runs to about 52 GB with the backends, so size the stick for what you actually keep, and format it **exFAT or NTFS** — FAT32 cannot hold files over 4 GB and every GGUF here is larger.
 2. On the target machine, copy it from the stick to a local SSD. Do not run models straight off a slow stick.
-3. Run `VERIFY.cmd` (or `VERIFY.command`) and wait for confirmation. It re-checks the SHA-256 of every model and binary, which is what catches a copy that was silently truncated.
-4. Run `INSTALL-PATH.cmd` (or `INSTALL-PATH.command`) once.
+3. Run `VERIFY.cmd` (or `VERIFY.command`, or `VERIFY.sh`) and wait for confirmation. It re-checks the SHA-256 of every model and binary, which is what catches a copy that was silently truncated.
+4. Run `INSTALL-PATH.cmd` (or `INSTALL-PATH.command`, or `INSTALL-PATH.sh`) once.
 5. Open a new terminal and run `llmfit`.
 
 The catalog is portable but the binaries are not: a folder carried from Windows has the CUDA, Vulkan and CPU backends, and a Mac needs the Metal one. The models are the expensive part and they are shared, so the target machine downloads 11 MB of backend and gets going. Copying between two machines of the same kind needs no download at all.
@@ -786,6 +859,12 @@ pi --provider llama-cpp --model qwen3.5-9b-q6 -p "say OK"
 
 **macOS: `zsh: permission denied: ./START.command`.** The executable bit did not survive however the folder reached you. `chmod +x START.command VERIFY.command CLEAN.command INSTALL-PATH.command bin/llmfit`.
 
+**Linux: `permission denied: ./START.sh`.** The same thing. `chmod +x START.sh VERIFY.sh CLEAN.sh INSTALL-PATH.sh bin/llmfit`.
+
+**Linux: `Missing required tool: jq`.** The bootstrap reads `config/bootstrap.json` before any PowerShell exists, so it needs `jq`, `curl` and `tar` from your package manager. Everything after that point is PowerShell and needs nothing installed.
+
+**Linux: PowerShell extracts but will not start.** Almost always a missing `libicu` on a minimal image; on Debian and Ubuntu `sudo apt install libicu-dev` resolves it.
+
 **macOS: the launcher refuses to start on an Intel Mac.** Only the `macos-arm64` build of `llama.cpp` is in the catalog. Add the `macos-x64` archive to `config/backends.json` with its SHA-256 if you need it.
 
 **macOS: I already have PowerShell and do not want another copy.** You will not get one. A `pwsh` on your `PATH` reporting version 7 or newer is used as is and nothing is downloaded.
@@ -808,7 +887,8 @@ pkill -x llama-server                            # macOS
 
 - Overhead constants measured on Apple Silicon, so the macOS fit table is calibrated rather than borrowed
 - Whether speculative decoding pays off on Metal, measured rather than assumed
-- Linux (CUDA / ROCm / Vulkan)
+- CUDA and ROCm backends for Linux, so an NVIDIA or AMD card is not limited to Vulkan there. ROCm is blocked today on RDNA3 iGPUs by the runtime, not by the catalog: the official `ubuntu-rocm-10.0` build of `llama.cpp` ships no `gfx1103` device code at all, and the multiarch nightly that does gets as far as `hsa_amd_queue_create failed!` on a SteamOS kernel, which surfaces as `hipErrorOutOfMemory` on the first `hipMemset`
+- Overhead constants measured on Linux for the rest of the catalog, so every fit table there is calibrated rather than borrowed from CUDA on Windows
 - Intel Macs (the `macos-x64` build)
 - More models in the catalog
 

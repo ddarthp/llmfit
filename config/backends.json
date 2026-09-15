@@ -1,5 +1,5 @@
 {
-  "_comment": "Every backend declares the platform it runs on, and the launcher only offers the ones that match. Windows archives are zips that extract flat; the macOS archive is a tar.gz whose contents sit under a llama-b<build> directory, so it declares stripComponents to land flat like the others. The tree counts are what PowerShell's Get-ChildItem -Recurse -File reports, which on macOS includes the .dylib symlinks: counting them with find(1) instead gives 43 rather than 61 and would fail verification.",
+  "_comment": "Every backend declares the platform it runs on, and the launcher only offers the ones that match. Windows archives are zips that extract flat; the macOS and Linux archives are tar.gz files whose contents sit under a llama-b<build> directory, so they declare stripComponents to land flat like the others. A backend may also declare the architecture it was built for, and the launcher then hides it on a machine of the other one: an x64 build is not something an aarch64 board should be offered and then fail to execute. The tree counts are what PowerShell's Get-ChildItem -Recurse -File reports, which on macOS includes the .dylib symlinks: counting them with find(1) instead gives 43 rather than 61 and would fail verification.",
   "cuda13": {
     "name": "NVIDIA CUDA 13.3 (GeForce RTX 20/30/40/50, Quadro, Tesla)",
     "platform": "windows",
@@ -61,6 +61,91 @@
         "file": "llama-cpu.zip",
         "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10566/llama-b10566-bin-win-cpu-x64.zip",
         "sha256": "594f822c829ea097e1f0528a2b5b9f9953dd00254b48c44438104ddfb87a1ab9"
+      }
+    ]
+  },
+  "vulkan-linux": {
+    "_comment": "The Linux counterpart of the Windows Vulkan backend, and the one to pick on any AMD or Intel GPU, an APU, or an NVIDIA card without CUDA installed. The ubuntu archives are tar.gz with the build under a llama-b<build> directory, so they strip one component to land flat, exactly like the macOS one.",
+    "name": "Vulkan (AMD, Intel and NVIDIA; recommended for APUs and integrated GPUs)",
+    "platform": "linux",
+    "architecture": "x64",
+    "folder": "llama.cpp-vulkan-linux",
+    "gpuLayers": 999,
+    "_pinDeviceComment": "Same reason as on Windows: llama.cpp splits over every device the backend enumerates, sized with the static 'free' from --list-devices, so a machine with an APU and a discrete card runs part of the model somewhere nobody chose. The launcher pins one device and sends --split-mode none.",
+    "pinDevice": true,
+    "_speculativeComment": "On, and measured here rather than assumed. Qwen 3.6 35B-A3B from its MTP build, 32K with vision and q8_0 KV on a gfx1103 iGPU: 28.2-28.6 tok/s without, 37.5-38.3 with, at draft acceptance 0.71-0.73 - the embedded nextn path works on this backend. That is NOT a clearance for every method: the Windows measurement on this same backend stands, where on b10566 Gemma 4 E4B with its COMPANION DRAFT FILE aborts during KV allocation with 'pre-allocated tensor (cache_k_l22) in a buffer (Vulkan0) that cannot run the operation (NONE)', which is Gemma 4's shared-KV layers meeting a Vulkan buffer that has no kernel for them. That path HAS now been run on Linux, with the same b10566 build, and it does not abort: Gemma 4 E4B loads its companion draft, generates and stops cleanly. What it does not do is pay - acceptance 0.34, and generation within noise of no speculation - so the three Gemma entries turn it off for Linux in their own blocks rather than the backend refusing it for everyone.",
+    "speculativeDecoding": true,
+    "tree": {
+      "files": 63,
+      "bytes": 95600024
+    },
+    "archives": [
+      {
+        "file": "llama-vulkan-linux-x64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10566/llama-b10566-bin-ubuntu-vulkan-x64.tar.gz",
+        "sha256": "773b3445348b5527dfe1601a7a37d9cf0e144a1023eee115351334bdb851b164",
+        "stripComponents": 1
+      }
+    ]
+  },
+  "vulkan-linux-arm64": {
+    "name": "Vulkan (ARM64: Ampere, Grace, Raspberry Pi and other aarch64 boards)",
+    "platform": "linux",
+    "architecture": "arm64",
+    "folder": "llama.cpp-vulkan-linux-arm64",
+    "gpuLayers": 999,
+    "pinDevice": true,
+    "speculativeDecoding": false,
+    "tree": {
+      "files": 57,
+      "bytes": 76645312
+    },
+    "archives": [
+      {
+        "file": "llama-vulkan-linux-arm64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10566/llama-b10566-bin-ubuntu-vulkan-arm64.tar.gz",
+        "sha256": "e6fe04fb37967f72f57017a01fea8c1eb12b5a22c96c4cd9f77fe802e3f8c413",
+        "stripComponents": 1
+      }
+    ]
+  },
+  "cpu-linux": {
+    "name": "CPU x64 (no acceleration; considerably slower)",
+    "platform": "linux",
+    "architecture": "x64",
+    "folder": "llama.cpp-cpu-linux",
+    "gpuLayers": 0,
+    "speculativeDecoding": false,
+    "tree": {
+      "files": 62,
+      "bytes": 42021736
+    },
+    "archives": [
+      {
+        "file": "llama-cpu-linux-x64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10566/llama-b10566-bin-ubuntu-x64.tar.gz",
+        "sha256": "0c34561d623299c113e46f9fdd97bff5b219b25554243a21a243aebc81253ea1",
+        "stripComponents": 1
+      }
+    ]
+  },
+  "cpu-linux-arm64": {
+    "name": "CPU ARM64 (no acceleration; considerably slower)",
+    "platform": "linux",
+    "architecture": "arm64",
+    "folder": "llama.cpp-cpu-linux-arm64",
+    "gpuLayers": 0,
+    "speculativeDecoding": false,
+    "tree": {
+      "files": 56,
+      "bytes": 32750120
+    },
+    "archives": [
+      {
+        "file": "llama-cpu-linux-arm64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10566/llama-b10566-bin-ubuntu-arm64.tar.gz",
+        "sha256": "39743a1f2e606d5573cee38233e8008d75e36f04ecf64aa1d5e28d4b5df03b2c",
+        "stripComponents": 1
       }
     ]
   },

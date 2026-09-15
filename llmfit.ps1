@@ -10,13 +10,19 @@ $toolsDirectory = Join-Path $root 'tools'
 
 # ------------------------------------------------------------------ platform
 
-# $IsWindows and $IsMacOS are PowerShell 7 automatic variables. Windows
-# PowerShell 5.1 does not define them at all, and that absence is itself the
-# answer: 5.1 only ever runs on Windows. They cannot be assigned to, because
+# $IsWindows, $IsMacOS and $IsLinux are PowerShell 7 automatic variables.
+# Windows PowerShell 5.1 does not define them at all, and that absence is itself
+# the answer: 5.1 only ever runs on Windows. They cannot be assigned to, because
 # PowerShell 7 makes them read-only, hence the separate names.
 $onWindows = if ($null -ne $IsWindows) { [bool]$IsWindows } else { $true }
 $onMacOS = if ($null -ne $IsMacOS) { [bool]$IsMacOS } else { $false }
-$platform = if ($onMacOS) { 'macos' } else { 'windows' }
+$onLinux = if ($null -ne $IsLinux) { [bool]$IsLinux } else { $false }
+$platform = if ($onMacOS) { 'macos' } elseif ($onLinux) { 'linux' } else { 'windows' }
+# Linux is the one platform shipped here for two architectures, so 'which
+# platform' stopped being enough to decide what can run. The .NET value is used
+# rather than uname because it is the same answer on every host and needs no
+# process. x64 and Arm64 are what it returns for the two that matter.
+$architecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
 $exeSuffix = if ($onWindows) { '.exe' } else { '' }
 $serverExe = "llama-server$exeSuffix"
 # On Windows the bundled curl is curl.exe; invoking it unqualified would find
@@ -288,10 +294,14 @@ function Get-CacheNote {
   # quantized KV cache causes was measured on CUDA, where flash attention has
   # no kernel for one and silently moves attention to the CPU. It has not been
   # measured on Metal, so it is not asserted there - saying "this will be slow"
-  # on a platform nobody tested would be inventing a measurement.
+  # on a platform nobody tested would be inventing a measurement. On Linux it
+  # HAS been measured, on Vulkan and one iGPU: Gemma 4 E4B, llama-bench, f16
+  # gives pp512 353.3 and tg128 31.9, q8_0 gives 329.3 and 31.0. The hole CUDA
+  # has is not there, so the note says the size of the real cost instead.
   param([string]$Type)
   if ($Type -like 'f*' -or $Type -like 'bf*') { return 'full precision, attention stays on the GPU' }
   if ($onMacOS) { return 'QUANTIZED: costs prompt speed on CUDA; unmeasured on Metal' }
+  if ($onLinux) { return 'QUANTIZED: collapses prompt on CUDA; 7% on Vulkan/gfx1103' }
   return 'QUANTIZED: attention falls back to the CPU on CUDA'
 }
 
@@ -343,10 +353,17 @@ function Read-CacheType {
 
 function Get-SystemRamMiB {
   # Win32_ComputerSystem is a WMI class and does not exist off Windows; the
-  # macOS answer comes from sysctl, which is always present.
+  # macOS answer comes from sysctl, which is always present. Linux has no
+  # sysctl for it and /proc/meminfo is the canonical source - MemTotal is
+  # already in KiB, and it is what free(1) itself reads.
   try {
     if ($onWindows) {
       return [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB)
+    }
+    if ($onLinux) {
+      $line = (Get-Content -LiteralPath '/proc/meminfo' -TotalCount 1)
+      if ("$line" -match '^MemTotal:\s+(\d+)\s+kB') { return [math]::Round([double]$matches[1] / 1024) }
+      return 0
     }
     $bytes = [double](& sysctl -n hw.memsize)
     if ($bytes -gt 0) { return [math]::Round($bytes / 1MB) }
@@ -386,17 +403,29 @@ $catalog = Read-JsonConfig 'models.json'
 $backends = Read-JsonConfig 'backends.json'
 $serverConfig = Read-JsonConfig 'server.json'
 
-$apiRoot = "http://$($serverConfig.host):$($serverConfig.port)"
+. (Join-Path $root (Join-Path 'lib' 'net.ps1'))
+# config/server.json holds the address llama-server BINDS to, and the useful
+# value there is 0.0.0.0 - every interface, which is what makes the server
+# reachable from the rest of the house. It is not an address anything can
+# connect to: Windows refuses it and the other two only fall through to the
+# loopback by accident. Everything this launcher and the harnesses talk to
+# therefore goes to $apiRoot below, and the addresses other machines use are
+# carried separately on $endpoint. See lib/net.ps1.
+$endpoint = Get-ServerEndpoint -ServerConfig $serverConfig -OnWindows $onWindows -OnMacOS $onMacOS -OnLinux $onLinux
+$apiRoot = $endpoint.LocalRoot
 $apiBase = "$apiRoot/v1"
 # Keys starting with '_' are documentation inside the catalog, not models.
 $modelKeys = @($catalog.Keys | Where-Object { -not $_.StartsWith('_') })
 # Only the backends that can run here. A CUDA zip is not something a Mac should
-# be offered and then fail to execute.
+# be offered and then fail to execute, and neither is an x64 build on an
+# aarch64 board. A backend without an architecture runs on the only one its
+# platform has.
 $backendKeys = @($backends.Keys | Where-Object {
-  -not $_.StartsWith('_') -and $backends[$_].platform -eq $platform
+  -not $_.StartsWith('_') -and $backends[$_].platform -eq $platform -and
+  ((-not $backends[$_].architecture) -or $backends[$_].architecture -eq $architecture)
 })
 if (-not $backendKeys.Count) {
-  throw "config/backends.json declares no backend for platform '$platform'."
+  throw "config/backends.json declares no backend for platform '$platform' on $architecture."
 }
 $piProvider = $serverConfig.harness.piProvider
 $openCodeProvider = $serverConfig.harness.openCodeProvider
@@ -463,7 +492,7 @@ foreach ($key in $backendKeys) {
 $recommended = 1
 for ($i = 0; $i -lt $options.Count; $i++) {
   if ($options[$i].Key -like 'cuda*' -and $options[$i].Devices.Count) { $recommended = $i + 1; break }
-  if ($options[$i].Devices.Count -and $recommended -eq 1 -and $options[$i].Key -ne 'cpu') { $recommended = $i + 1 }
+  if ($options[$i].Devices.Count -and $recommended -eq 1 -and $options[$i].Key -notlike 'cpu*') { $recommended = $i + 1 }
 }
 
 for ($i = 0; $i -lt $options.Count; $i++) {
@@ -488,7 +517,7 @@ for ($i = 0; $i -lt $options.Count; $i++) {
         Write-Host ''
       }
     }
-  } elseif ($option.Key -eq 'cpu') {
+  } elseif ($option.Key -like 'cpu*') {
     Write-Host ("       no GPU: uses system RAM, {0} nominally free" -f (Format-MiB $systemRamMiB)) -ForegroundColor DarkGray
   } else {
     Write-Host '       no devices detected' -ForegroundColor DarkGray
@@ -500,7 +529,7 @@ $selected = $options[$choice - 1]
 $backendKey = $selected.Key
 $backend = $selected.Backend
 Ensure-Backend -Backend $backend
-if (-not $selected.Devices.Count -and $backendKey -ne 'cpu') {
+if (-not $selected.Devices.Count -and $backendKey -notlike 'cpu*') {
   $selected.Devices = @(Get-BackendDevices -Folder $backend.folder)
   if ($selected.Devices.Count) { $selected.BudgetMiB = ($selected.Devices | Measure-Object -Property TotalMiB -Maximum).Maximum - $deviceReserveMiB }
 }
@@ -662,6 +691,11 @@ if (-not $overheadBlock) {
   if ($overheadBlock.Contains($platform)) { $platformBlock = $overheadBlock[$platform] }
   if ($platformBlock) { $overheadBlock = $platformBlock } else { $overheadCalibrated = $false }
 }
+# A block that carries only platform sub-blocks has no top-level baseMiB, and on
+# Windows the branch above never looks inside one. Without this the constants
+# from server.json would stand in silently, which is the one thing the warning
+# below exists to prevent.
+if ($overheadBlock -and $null -eq $overheadBlock.baseMiB) { $overheadCalibrated = $false }
 $overheadMiB = if ($overheadBlock -and $null -ne $overheadBlock.baseMiB) { [double]$overheadBlock.baseMiB }
                else { [double]$serverConfig.computeOverheadMiB }
 if ($useVision) {
@@ -956,6 +990,31 @@ Write-Host "  Spec dec  : $specSummary"
 Write-Host "  Estimated : $(Format-MiB $finalMiB) of $(Format-MiB $budgetMiB) usable"
 Write-Host "  API       : $apiBase"
 Write-Host "  Chat UI   : $apiRoot  (built into llama.cpp, always available)"
+# Where everyone else reaches it. The server has been listening on every
+# interface all along; what was missing was anyone being told the address.
+if (-not $endpoint.IsWildcard) {
+  Write-Host "  LAN       : not reachable - bound to $($endpoint.BindHost) only." -ForegroundColor DarkGray
+  Write-Host '              Set "host": "0.0.0.0" in config/server.json to open it to this network.' -ForegroundColor DarkGray
+} elseif (-not $endpoint.LanAddresses.Count) {
+  Write-Host '  LAN       : listening on every interface, but this machine has no network address right now.' -ForegroundColor DarkGray
+} else {
+  $lanRoot = $endpoint.LanRoots[0]
+  Write-Host "  LAN       : $lanRoot  - same paths, from any device on this network" -ForegroundColor Cyan
+  Write-Host "              API $lanRoot/v1" -ForegroundColor DarkGray
+  if ($endpoint.MdnsRoot) {
+    Write-Host "              or $($endpoint.MdnsRoot) wherever mDNS resolves" -ForegroundColor DarkGray
+  }
+  $otherAddresses = @($endpoint.LanAddresses | Select-Object -Skip 1)
+  if ($otherAddresses.Count) {
+    # A machine with Docker or a VPN listens on those too. Named, not hidden:
+    # the first line is the one the routing table says the LAN would use, and
+    # these are the rest of what a wildcard bind really opened.
+    Write-Host ("              also listening on " + (($otherAddresses | ForEach-Object { "$($_.Address) ($($_.Interface))" }) -join ', ')) -ForegroundColor DarkGray
+  }
+  if ($onWindows) {
+    Write-Host '              Windows Defender asks to allow this the first time; it has to be allowed on Private networks.' -ForegroundColor DarkGray
+  }
+}
 if ($onWindows) {
   Write-Host '  The server stays in its own window. Leave it open.' -ForegroundColor DarkGray
 } else {
