@@ -11,6 +11,14 @@ tools/
 llama-server.pid
 llama-server.log
 llama-server.err.log
+llmfit-panel.log
+llmfit-fetch.log
+
+# What the panel is doing right now: which configuration was asked for and how
+# far its downloads got. Both are rewritten on every run and mean nothing on
+# another machine.
+.llmfit-ui-state.json
+.llmfit-ui-progress.json
 
 # Backups llmfit.ps1 makes before touching your harness configuration
 *.llmfit-backup

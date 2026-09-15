@@ -10,3 +10,9 @@
 *.command text eol=lf
 *.sh text eol=lf
 *.zsh text eol=lf
+
+# The panel is served as-is; CRLF in the JavaScript would work but the diffs
+# would not.
+*.js text eol=lf
+*.css text eol=lf
+*.html text eol=lf
