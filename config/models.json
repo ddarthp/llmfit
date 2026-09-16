@@ -183,6 +183,14 @@
       "kvElementsPerToken": 10240,
       "kvElementsFixed": 0,
       "maxContext": 262144,
+      "expertOffload": {
+        "_comment": "What --n-cpu-moe can move off the card, and the reason this 35B reaches 256K on a 16 GB one at all. Only the expert FFN tensors move; attention, embeddings and the shared layers stay on the GPU, which is why it still behaves like a GPU model. The split is not subtle here: 84.8% of this file is experts. Measured, not derived - see derivation.",
+        "expertMiB": 13618.0,
+        "expertLayers": 40,
+        "residentMiB": 2436.6,
+        "derivation": "Parsed from the GGUF tensor table of the local 35B file: 733 tensors, the count models.json already records for that build. Every tensor whose name matches blk.N.ffn_*_exps summed per layer, sizes taken as the distance between consecutive tensor offsets. Total 13618.0 MiB of experts across 40 layers, 340.4 MiB per layer on average, against 2436.6 MiB of everything else. The layers are NOT uniform - the first four measure 361 MiB each - and lib/fit.ps1 models the average on purpose, because --n-cpu-moe moves the first N and the average therefore under-reports what they free. Re-measure the same way if the quantization changes.",
+        "cost": "UNMEASURED. Only 8 of 256 experts run per token, so with 16 layers on CPU roughly 170 MiB has to be read from system RAM per token, which dual-channel DDR5 should not struggle with. That is arithmetic, not a benchmark. Run llama-bench with and without --n-cpu-moe before believing it."
+      },
       "detail": {
         "architecture": "qwen35moe",
         "blockCount": 40,
@@ -254,6 +262,14 @@
       "kvElementsPerToken": 10240,
       "kvElementsFixed": 0,
       "maxContext": 262144,
+      "expertOffload": {
+        "_comment": "CARRIED OVER FROM qwen3.6-35b-a3b-q3 AND NOT MEASURED ON THIS FILE. Same model and same quantization, so the expert stack should be identical; the MTP build differs by one nextn block, 41 against 40, and 16429 MiB against 16064 - about 365 MiB that is NOT expert tensors. Treat the numbers below as the sibling's until somebody parses this file the way the other one was parsed. The 365 MiB of difference sits in residentMiB, which means the solver is reading this model as lighter on the GPU than it is: expect it to under-shoot N by roughly one layer here.",
+        "expertMiB": 13618.0,
+        "expertLayers": 40,
+        "residentMiB": 2436.6,
+        "derivation": "Parsed from the GGUF tensor table of the local 35B file: 733 tensors, the count models.json already records for that build. Every tensor whose name matches blk.N.ffn_*_exps summed per layer, sizes taken as the distance between consecutive tensor offsets. Total 13618.0 MiB of experts across 40 layers, 340.4 MiB per layer on average, against 2436.6 MiB of everything else. The layers are NOT uniform - the first four measure 361 MiB each - and lib/fit.ps1 models the average on purpose, because --n-cpu-moe moves the first N and the average therefore under-reports what they free. Re-measure the same way if the quantization changes.",
+        "cost": "UNMEASURED. Only 8 of 256 experts run per token, so with 16 layers on CPU roughly 170 MiB has to be read from system RAM per token, which dual-channel DDR5 should not struggle with. That is arithmetic, not a benchmark. Run llama-bench with and without --n-cpu-moe before believing it."
+      },
       "detail": {
         "architecture": "qwen35moe",
         "blockCount": 41,
@@ -476,6 +492,14 @@
       "kvElementsPerToken": 10240,
       "kvElementsFixed": 104857600,
       "maxContext": 262144,
+      "expertOffload": {
+        "_comment": "What --n-cpu-moe can move off the card. Even more lopsided than the Qwen 35B: 90.2% of this file is expert tensors, so its 30 layers are a bigger lever than the other model's 40. Measured, not derived - see derivation.",
+        "expertMiB": 12251.3,
+        "expertLayers": 30,
+        "residentMiB": 1322.6,
+        "derivation": "Parsed from the GGUF tensor table of the local file: 658 tensors. Every tensor matching blk.N.ffn_*_exps summed per layer, sizes taken as the distance between consecutive tensor offsets. Total 12251.3 MiB of experts across 30 layers, 408.4 MiB per layer on average, against 1322.6 MiB of everything else. Re-measure the same way if the quantization changes.",
+        "cost": "UNMEASURED, and this is a QAT build: what quantization-aware training does to a model whose experts are read from system RAM has not been checked here either."
+      },
       "detail": {
         "architecture": "gemma4",
         "blockCount": 30,

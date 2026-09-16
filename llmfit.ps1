@@ -467,21 +467,49 @@ if (-not $overhead.Calibrated) {
   Write-Host ''
 }
 $contexts = @(Get-FitTable -Model $model -ServerConfig $serverConfig -BudgetMiB $budgetMiB `
-  -WeightsMiB $weightsMiB -VisionMiB $visionMiB -CacheBytes $cacheBytes -OverheadMiB $overheadMiB)
+  -WeightsMiB $weightsMiB -VisionMiB $visionMiB -CacheBytes $cacheBytes -OverheadMiB $overheadMiB `
+  -Platform $platform -SystemRamMiB $systemRamMiB)
 
 $defaultContext = 1
+$anyOffload = $false
 for ($i = 0; $i -lt $contexts.Count; $i++) {
   $entry = $contexts[$i]
   $status = if ($entry.Fits) { 'FITS' } elseif ($entry.Tight) { 'TIGHT' } else { 'TOO BIG' }
   $color = if ($entry.Fits) { 'Green' } elseif ($entry.Tight) { 'Yellow' } else { 'Red' }
-  if ($entry.Fits) { $defaultContext = $i + 1 }
+  # The default lands on the longest context that needs NOTHING moved off the
+  # card. A row that only gets there with experts in system RAM is a trade, and
+  # a trade is something to pick on purpose rather than to inherit by pressing
+  # Enter on a table you skimmed.
+  if ($entry.Fits -and -not $entry.CpuMoeN) { $defaultContext = $i + 1 }
   Write-Host ("  {0,2}) {1,5}   KV {2,10}   estimated total {3,10}   " -f ($i + 1), "$($entry.Context / 1024)K", (Format-MiB $entry.KvMiB), (Format-MiB $entry.TotalMiB)) -NoNewline
-  Write-Host $status -ForegroundColor $color
+  Write-Host $status -ForegroundColor $color -NoNewline
+  if ($entry.CpuMoeN) {
+    $anyOffload = $true
+    Write-Host "   experts of $($entry.CpuMoeN) layers in system RAM, $(Format-MiB $entry.OffloadMiB) off the card" -ForegroundColor DarkCyan
+  } else {
+    Write-Host ''
+  }
+}
+if ($anyOffload) {
+  Write-Host ''
+  Write-Host '  A row with a cyan note reaches that context only because some expert layers' -ForegroundColor DarkGray
+  Write-Host '  stop living on the card. The total shown is what stays in VRAM; the rest is' -ForegroundColor DarkGray
+  Write-Host '  read from system RAM by the CPU. Only a fraction of the experts run per token,' -ForegroundColor DarkGray
+  Write-Host '  so the cost is expected to be small - and NOBODY HERE HAS MEASURED IT. Compare' -ForegroundColor DarkGray
+  Write-Host '  tokens per second against a row that needs none before trusting the trade.' -ForegroundColor DarkGray
 }
 
 $choice = Read-Choice -Prompt 'Context' -Maximum $contexts.Count -Default $defaultContext
 $contextEntry = $contexts[$choice - 1]
 $contextSize = $contextEntry.Context
+# Resolved from the row, never asked. The user picked a context; how many expert
+# layers that costs is arithmetic, and arithmetic is this tool's job.
+$nCpuMoe = [int]$contextEntry.CpuMoeN
+if ($nCpuMoe -gt 0) {
+  Write-Host ''
+  Write-Host "  Experts of the first $nCpuMoe of $($model.geometry.expertOffload.expertLayers) layers go to system RAM, keeping $(Format-MiB $contextEntry.OffloadMiB) off the card." -ForegroundColor Cyan
+  Write-Host "  Without that, $($contextSize / 1024)K would need $(Format-MiB $contextEntry.FullTotalMiB) against a budget of $(Format-MiB $budgetMiB)." -ForegroundColor DarkGray
+}
 
 # -------------------------------------------------- 4. SPECULATIVE DECODING
 
@@ -576,6 +604,9 @@ $serveScript = Join-Path $root 'serve.ps1'
 # whatever the menu returned, and a server that loads a different type turns that
 # table into a description of a run nobody performed.
 $serveArguments = @('-ModelKey', $modelKey, '-Backend', $backendKey, '-Context', "$contextSize", '-CacheType', $cacheType)
+# Same invariant as -CacheType: the fit table was drawn with this number, so the
+# server has to load with it too or the table described a different run.
+if ($nCpuMoe -gt 0) { $serveArguments += @('-NCpuMoe', "$nCpuMoe") }
 if ($deviceId) { $serveArguments += @('-Device', $deviceId) }
 if ($useVision) { $serveArguments += '-Vision' }
 if ($useSpec) { $serveArguments += '-Spec' }

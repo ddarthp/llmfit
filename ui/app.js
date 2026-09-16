@@ -152,11 +152,16 @@ function optionsScreen() {
       const verdict = row.fits ? '<span class="pill good">FITS</span>'
         : row.tight ? '<span class="pill warn">TIGHT</span>'
         : '<span class="pill bad">TOO BIG</span>';
+      // A tile that only reaches its length because expert layers left the card
+      // has to say so. FITS on its own would hide the trade, and the total shown
+      // beside it is what stays in VRAM - which reads as a bargain until you
+      // know the rest is being read from system RAM.
+      const offload = row.cpuMoeN ? `<span class="pill moe">${row.cpuMoeN} expert layers in RAM</span>` : '';
       return `
         <button class="tile ${row.tight ? '' : 'dim'}" data-nav data-action="context" data-key="${row.context}" aria-pressed="${row.context === state.context}">
           <span class="ctx">${k(row.context)}</span>
           <span class="meta">KV ${mib(row.kvMiB)} · total ${mib(row.totalMiB)}</span>
-          <span class="row">${verdict}</span>
+          <span class="row">${verdict}${offload}</span>
         </button>`;
     }).join('') + `</div></div>`;
 
@@ -354,9 +359,11 @@ async function refreshFit() {
   if (!rows.length) { state.context = null; return; }
   const current = rows.find((row) => row.context === state.context);
   if (!current) {
-    // The same default the launcher picks: the longest length that still fits
-    // comfortably, or the shortest one if none of them do.
-    const fitting = rows.filter((row) => row.fits);
+    // The same default the launcher picks: the longest length that fits
+    // comfortably with NOTHING moved off the card, or the shortest one if none
+    // of them do. A length that is only reachable with experts in system RAM is
+    // a trade to choose deliberately, not one to land on by opening the panel.
+    const fitting = rows.filter((row) => row.fits && !row.cpuMoeN);
     state.context = (fitting.length ? fitting[fitting.length - 1] : rows[0]).context;
   }
 }

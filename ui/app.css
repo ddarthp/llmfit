@@ -59,6 +59,10 @@ h1 { font-size: 22px; margin: 0 0 4px; }
 .pill.good { color: var(--good); border-color: rgba(61,220,151,.4); }
 .pill.warn { color: var(--warn); border-color: rgba(255,200,87,.4); }
 .pill.bad { color: var(--bad); border-color: rgba(255,107,107,.4); }
+/* Not a verdict like the three above - it sits NEXT to one. A row can be green
+   and still be carrying expert layers in system RAM, so this reads as a note on
+   the verdict rather than as a fourth colour competing with it. */
+.pill.moe { color: var(--accent); border-color: rgba(53,201,232,.4); }
 
 .fit { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); }
 .fit .tile { min-height: 64px; }

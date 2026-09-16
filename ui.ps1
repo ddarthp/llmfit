@@ -209,7 +209,8 @@ function Get-FitPayload {
   }
   $overhead = Get-ModelOverhead -Model $model -ServerConfig $serverConfig -Platform $platform -OnWindows $onWindows -UseVision $useVision
   $rows = Get-FitTable -Model $model -ServerConfig $serverConfig -BudgetMiB $budget.BudgetMiB `
-    -WeightsMiB $weightsMiB -VisionMiB $visionMiB -CacheBytes $cacheBytes -OverheadMiB $overhead.MiB
+    -WeightsMiB $weightsMiB -VisionMiB $visionMiB -CacheBytes $cacheBytes -OverheadMiB $overhead.MiB `
+    -Platform $platform -SystemRamMiB $budget.SystemRamMiB
 
   $specRows = @{}
   foreach ($row in $rows) {
@@ -227,7 +228,13 @@ function Get-FitPayload {
     cacheType = $cacheType; cacheBytes = $cacheBytes
     downloaded = (Test-Path -LiteralPath (Join-Path $modelsDirectory $model.modelFile))
     rows = @($rows | ForEach-Object {
-      [ordered]@{ context = $_.Context; kvMiB = $_.KvMiB; totalMiB = $_.TotalMiB; fits = $_.Fits; tight = $_.Tight }
+      # cpuMoeN is $null - not 0 - on a row that no amount of offload can reach,
+      # so the panel can tell "nothing needs to move" from "nothing would help".
+      [ordered]@{
+        context = $_.Context; kvMiB = $_.KvMiB; totalMiB = $_.TotalMiB
+        fullTotalMiB = $_.FullTotalMiB; cpuMoeN = $_.CpuMoeN; offloadMiB = $_.OffloadMiB
+        fits = $_.Fits; tight = $_.Tight
+      }
     })
     spec = $specRows
   }
@@ -243,11 +250,20 @@ function Start-Run {
   $useSpec = [bool]$Request.spec
   $context = [int]$Request.context
   $cacheType = [string]$Request.cacheType
+  # Derived here rather than taken from the request, and that is the whole point.
+  # The panel could send a number, but then a panel that forgot to would launch a
+  # row the table marked FITS with every expert on the card, and the run would die
+  # on a configuration the table promised. Re-running the same fit the panel drew
+  # makes the two impossible to disagree.
+  $fit = Get-FitPayload -Request $Request
+  $fitRow = @($fit.rows | Where-Object { [int]$_.context -eq $context })[0]
+  $cpuMoeN = if ($fitRow -and $fitRow.cpuMoeN) { [int]$fitRow.cpuMoeN } else { 0 }
 
   Remove-Item -LiteralPath $progressPath -Force -ErrorAction SilentlyContinue
   $launched = [ordered]@{
     modelKey = $modelKey; alias = $model.alias; backendKey = $backendKey; vision = $useVision
-    spec = $useSpec; context = $context; cacheType = $cacheType; startedAt = (Get-Date).ToString('o')
+    spec = $useSpec; context = $context; cacheType = $cacheType; cpuMoeN = $cpuMoeN
+    startedAt = (Get-Date).ToString('o')
   }
   [System.IO.File]::WriteAllText($statePath, ($launched | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
 
@@ -284,6 +300,7 @@ function Start-Server {
     '-ModelKey', $launched.modelKey, '-Backend', $launched.backendKey,
     '-Context', "$($launched.context)", '-CacheType', $launched.cacheType
   )
+  if ($launched.cpuMoeN) { $serveArguments += @('-NCpuMoe', "$($launched.cpuMoeN)") }
   if ($launched.vision) { $serveArguments += '-Vision' }
   if ($launched.spec) { $serveArguments += '-Spec' }
   Stop-Server | Out-Null

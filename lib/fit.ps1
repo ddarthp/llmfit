@@ -181,22 +181,125 @@ function Get-ModelOverhead {
   }
 }
 
+function Get-ExpertOffloadGeometry {
+  # What --n-cpu-moe has to work with, or $null when the question does not
+  # apply. A dense model has no expert tensors at all, and a mixture of experts
+  # nobody has measured has none the catalog can prove, so both answer the same
+  # way and every caller below falls back to "all of it lands in VRAM" - which
+  # is exactly what this project computed before offload existed.
+  param($Geometry)
+  if (-not $Geometry -or -not $Geometry.Contains('expertOffload')) { return $null }
+  $block = $Geometry['expertOffload']
+  if (-not $block) { return $null }
+  if (-not $block.Contains('expertMiB') -or -not $block.Contains('expertLayers')) { return $null }
+  if ([double]$block['expertMiB'] -le 0 -or [int]$block['expertLayers'] -le 0) { return $null }
+  return $block
+}
+
+function Get-ExpertOffloadMiB {
+  # What --n-cpu-moe N takes off the card, modelled as N average layers rather
+  # than from a per-layer table. That direction is chosen, not convenient: on
+  # both models measured here the FIRST layers are slightly larger than the
+  # average - 361 MiB against 340 on the 35B - and --n-cpu-moe moves the first
+  # N. The average therefore under-reports what N actually frees, so a solver
+  # built on it lands on an N at least as large as the one needed. A fit table
+  # is allowed to be pessimistic. It is not allowed to be optimistic.
+  param($Offload, [int]$N)
+  if (-not $Offload -or $N -le 0) { return 0.0 }
+  $layers = [int]$Offload['expertLayers']
+  if ($N -ge $layers) { return [double]$Offload['expertMiB'] }
+  return [double]$Offload['expertMiB'] * $N / $layers
+}
+
+function Get-CpuMoeLayers {
+  # The inversion this feature exists for. The fit table used to answer "which
+  # contexts fit" and strike out the rest; for a mixture of experts the better
+  # question is "you want THIS context - how many layers of experts have to move
+  # to system RAM to get it", and that has an answer for every rung up to the
+  # point where the whole expert stack is not enough.
+  #
+  # Returns the SMALLEST N that lands under the target, because every layer
+  # moved is expert weights read from system RAM over PCIe instead of from
+  # VRAM. 0 when the configuration already fits and nothing needs to move, and
+  # $null when no N is enough - which is a row that genuinely cannot run.
+  # MaxOffloadMiB is the other half of the trade and the half that is easy to
+  # forget: memory that leaves the card has to land somewhere. Without this cap
+  # the solver happily moves 5 GiB onto a machine that does not have 5 GiB to
+  # spare, and the reward is swapping - which is slower than the context length
+  # the move was bought for could ever be worth.
+  param($Offload, [double]$FullTotalMiB, [double]$TargetMiB, [double]$MaxOffloadMiB)
+  if ($FullTotalMiB -le $TargetMiB) { return 0 }
+  if (-not $Offload) { return $null }
+  $layers = [int]$Offload['expertLayers']
+  for ($n = 1; $n -le $layers; $n++) {
+    $freedMiB = Get-ExpertOffloadMiB -Offload $Offload -N $n
+    if ($freedMiB -gt $MaxOffloadMiB) { return $null }
+    if (($FullTotalMiB - $freedMiB) -le $TargetMiB) { return $n }
+  }
+  return $null
+}
+
 function Get-FitTable {
   # One row per context length the catalog offers, with the two verdicts the
   # launcher colours and the panel paints: Fits is the comfortable 92% of the
   # budget, Tight is everything up to the budget itself.
+  #
+  # A measured mixture of experts gets a third number: CpuMoeN, the layers whose
+  # experts move to system RAM to make the row reachable at all. TotalMiB is
+  # always what ends up RESIDENT ON THE CARD, so both verdicts describe the
+  # configuration the launcher would actually start rather than a hypothetical
+  # one; FullTotalMiB keeps the all-on-GPU figure for anything that wants to
+  # show what the move bought. On a dense model CpuMoeN is 0 on every row and
+  # TotalMiB is the number this function always returned.
   param(
     $Model, $ServerConfig, [double]$BudgetMiB, [double]$WeightsMiB,
-    [double]$VisionMiB, [double]$CacheBytes, [double]$OverheadMiB
+    [double]$VisionMiB, [double]$CacheBytes, [double]$OverheadMiB,
+    [string]$Platform = 'windows', [double]$SystemRamMiB = 0
   )
+  $offload = Get-ExpertOffloadGeometry -Geometry $Model.geometry
+  # Two ways the trade stops being real, both of them about where the memory
+  # goes rather than about the model.
+  #
+  # Unified memory is the first. On Apple Silicon the card's memory and system
+  # RAM are the same physical chips, so moving experts to a CPU buffer takes
+  # them out of the Metal working set without freeing a single byte of the
+  # machine. The budget would go down and the memory used would not, which is a
+  # fit table telling a comfortable lie. Modelling that honestly means checking
+  # the total against system RAM rather than against a device budget, and that
+  # is a different calculation from this one - so until somebody writes it and
+  # measures it on a Mac, no offload is offered there.
+  if ($Platform -eq 'macos') { $offload = $null }
+  # Not knowing how much RAM the machine has is the second. Lending memory that
+  # cannot be counted is the promise this project exists to stop making.
+  $maxOffloadMiB = 0.0
+  if ($offload) {
+    if ($SystemRamMiB -gt 0) {
+      $reserve = [double]$ServerConfig.expertOffloadRamReservePercent
+      $maxOffloadMiB = $SystemRamMiB * (1.0 - ($reserve / 100.0))
+    } else {
+      $offload = $null
+    }
+  }
+  # The solver aims at the comfortable threshold, not at the budget itself.
+  # Layers are coarse - 340 MiB each on the 35B - so aiming at the ceiling
+  # almost never buys another rung, and it would spend the exact margin that
+  # makes a row green on a card whose driver reserve is an estimate.
+  $targetMiB = $BudgetMiB * 0.92
   $rows = @()
   foreach ($context in $ServerConfig.contextOptions) {
     if ($context -gt $Model.geometry.maxContext) { continue }
     $kvMiB = Get-KvMiB -Geometry $Model.geometry -Context $context -BytesPerElement $CacheBytes
-    $totalMiB = $WeightsMiB + $VisionMiB + $kvMiB + $OverheadMiB
+    $fullMiB = $WeightsMiB + $VisionMiB + $kvMiB + $OverheadMiB
+    $cpuMoeN = Get-CpuMoeLayers -Offload $offload -FullTotalMiB $fullMiB -TargetMiB $targetMiB -MaxOffloadMiB $maxOffloadMiB
+    # $null means no N was enough. It has to stay distinguishable from 0 for the
+    # front ends, but the arithmetic below treats it as "nothing moved", which
+    # leaves TotalMiB at the full figure and the row correctly marked TOO BIG.
+    $offloadMiB = Get-ExpertOffloadMiB -Offload $offload -N ([int]$cpuMoeN)
+    $totalMiB = $fullMiB - $offloadMiB
     $rows += [pscustomobject]@{
       Context = $context; KvMiB = $kvMiB; TotalMiB = $totalMiB
-      Fits = ($totalMiB -le ($BudgetMiB * 0.92)); Tight = ($totalMiB -le $BudgetMiB)
+      FullTotalMiB = $fullMiB; CpuMoeN = $cpuMoeN; OffloadMiB = $offloadMiB
+      Fits = ($totalMiB -le $targetMiB); Tight = ($totalMiB -le $BudgetMiB)
     }
   }
   return @($rows)

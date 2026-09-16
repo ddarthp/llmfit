@@ -4,6 +4,12 @@ param(
   [int]$Context = 0,
   [string]$Device = '',
   [string]$CacheType = '',
+  # How many layers' experts to keep in system RAM. Resolved by the fit table
+  # rather than chosen here, for the same reason -CacheType is passed in: the
+  # table was drawn against a number, and the server has to load the same one or
+  # the table described a run nobody performed. 0 leaves every expert on the GPU,
+  # which is what this script did before the flag existed.
+  [int]$NCpuMoe = 0,
   [switch]$Vision,
   # Named -Mtp while draft weights were the only speculative method here. It now
   # also turns on model-free methods, which are not MTP, so the name widened;
@@ -160,6 +166,7 @@ Write-Host "  Context  : $($Context / 1024)K tokens" -ForegroundColor Cyan
 Write-Host "  Vision   : $(if ($Vision) { 'on (mmproj F16)' } else { 'off' })" -ForegroundColor Cyan
 Write-Host "  Spec dec : $specText" -ForegroundColor Cyan
 Write-Host "  KV cache : $cacheType  ($cacheSource)" -ForegroundColor Cyan
+Write-Host "  Experts  : $(if ($NCpuMoe -gt 0) { "first $NCpuMoe layers in system RAM (--n-cpu-moe)" } else { 'all on the GPU' })" -ForegroundColor Cyan
 Write-Host "  Sampling : $($sampling.Name)  [$($sampling.Source)]" -ForegroundColor Cyan
 Write-Host ("             temp $($sampling.Values.temperature)  top-p $($sampling.Values.topP)  top-k $($sampling.Values.topK)  min-p $($sampling.Values.minP)  presence $($sampling.Values.presencePenalty)  repeat $($sampling.Values.repeatPenalty)") -ForegroundColor DarkGray
 # The bind address is not an address anything connects to; see lib/net.ps1.
@@ -204,6 +211,13 @@ $arguments = @(
 # use. The launcher picked one device and budgeted the fit table against it; not
 # sending that choice on would make the table describe a run nobody performed.
 if ($Device) { $arguments += @('--device', $Device, '--split-mode', 'none') }
+# Expert offload, and note what it is NOT: this does not split the model across
+# devices, and it is not a second GPU. It moves the expert FFN tensors of the
+# first N layers into system RAM, where the CPU computes them. It only pays on a
+# mixture of experts, where a fraction of the experts run per token - 8 of 256 on
+# the Qwen 35B - so the weights that moved are mostly read by nobody on any given
+# token. Sending it for a dense model would move layers that run every time.
+if ($NCpuMoe -gt 0) { $arguments += @('--n-cpu-moe', $NCpuMoe) }
 if ($Vision) {
   $arguments += @('--mmproj', $mmprojPath)
   # Raising the encoder's minimum resolution is model specific: Qwen's encoder
