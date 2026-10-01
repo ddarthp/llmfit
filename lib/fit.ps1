@@ -77,6 +77,40 @@ function Get-LiveFreeByName {
   return $map
 }
 
+function Test-LinuxCudaAvailable {
+  # The Linux CUDA archive bundles its CUDA user-space libraries, but it still
+  # needs a working NVIDIA kernel driver. nvidia-smi is part of that driver and
+  # is a cheap, side-effect-free check that a CUDA backend can actually have a
+  # device to enumerate. Do not offer a 1 GB CUDA download on an AMD/Intel box.
+  try {
+    # /usr/bin and /bin can both occur in PATH. PowerShell then returns two
+    # ApplicationInfo objects; invoking their expanded .Source becomes one
+    # invalid string such as '/usr/bin/nvidia-smi /bin/nvidia-smi'. Use one.
+    $nvidiaSmi = @(Get-Command nvidia-smi -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1)[0]
+    if (-not $nvidiaSmi) { return $false }
+    $devices = @(& $nvidiaSmi.Source --query-gpu=name --format=csv,noheader 2>$null)
+    return ($LASTEXITCODE -eq 0 -and $devices.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace("$($devices[0])"))
+  } catch {}
+  return $false
+}
+
+function Get-AvailableBackendKeys {
+  # The catalog describes packages; this function describes packages that are
+  # meaningful on this host. Linux keeps Vulkan and CPU as universal fallbacks,
+  # while CUDA is conditional on the NVIDIA driver having at least one device.
+  param(
+    $Backends, [string]$Platform, [string]$Architecture, [bool]$OnLinux
+  )
+  return @($Backends.Keys | Where-Object {
+    $key = $_
+    $backend = $Backends[$key]
+    if ($key.StartsWith('_') -or $backend.platform -ne $Platform) { return $false }
+    if ($backend.architecture -and $backend.architecture -ne $Architecture) { return $false }
+    if ($OnLinux -and $backend.requiresCuda -and -not (Test-LinuxCudaAvailable)) { return $false }
+    return $true
+  })
+}
+
 function Get-PlatformSetting {
   # Any config block may carry a sub-block named after a platform, and a value
   # there wins over the same key at the top level. Almost nothing measured on

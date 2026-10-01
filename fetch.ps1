@@ -17,10 +17,15 @@ $toolsDirectory = Join-Path $root 'tools'
 $downloadsDirectory = Join-Path $root 'downloads'
 
 $onWindows = if ($null -ne $IsWindows) { [bool]$IsWindows } else { $true }
+$onMacOS = if ($null -ne $IsMacOS) { [bool]$IsMacOS } else { $false }
+$onLinux = if ($null -ne $IsLinux) { [bool]$IsLinux } else { $false }
+$platform = if ($onMacOS) { 'macos' } elseif ($onLinux) { 'linux' } else { 'windows' }
+$architecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
 $serverExe = if ($onWindows) { 'llama-server.exe' } else { 'llama-server' }
 $curlCommand = if ($onWindows) { 'curl.exe' } else { 'curl' }
 
 . (Join-Path $root (Join-Path 'lib' 'config.ps1'))
+. (Join-Path $root (Join-Path 'lib' 'fit.ps1'))
 . (Join-Path $root (Join-Path 'lib' 'artifacts.ps1'))
 
 # Progress is a single JSON file rewritten at each step, not a log to be
@@ -72,6 +77,18 @@ $backends = Read-JsonConfig -Name 'backends.json' -Root $root
 $model = $catalog[$ModelKey]
 if (-not $model) { throw "Unknown model key: $ModelKey" }
 
+# Validate the requested backend before even listing model artifacts. The panel
+# invokes this script asynchronously, but it is also a direct entry point: an
+# unsupported CUDA request must fail before it can start a multi-gigabyte model
+# download that can never be served on this host.
+$selectedBackend = $null
+if ($Backend) {
+  $selectedBackend = $backends[$Backend]
+  if (-not $selectedBackend) { throw "Unknown backend: $Backend" }
+  $availableBackendKeys = Get-AvailableBackendKeys -Backends $backends -Platform $platform -Architecture $architecture -OnLinux $onLinux
+  if ($availableBackendKeys -notcontains $Backend) { throw "Backend is not available on this machine: $Backend" }
+}
+
 # Everything this configuration needs on disk, listed before anything is
 # fetched, so the panel can show the whole bill up front rather than one
 # surprise at a time.
@@ -99,11 +116,9 @@ for ($i = 0; $i -lt $wanted.Count; $i++) {
 }
 
 if ($Backend) {
-  $selected = $backends[$Backend]
-  if (-not $selected) { throw "Unknown backend: $Backend" }
-  if (-not (Test-Path -LiteralPath (Join-Path (Join-Path $toolsDirectory $selected.folder) $serverExe))) {
-    Write-Progress-File -State 'downloading' -Message "Preparing backend $($selected.name)"
-    Ensure-Backend -Backend $selected -ToolsDirectory $toolsDirectory `
+  if (-not (Test-Path -LiteralPath (Join-Path (Join-Path $toolsDirectory $selectedBackend.folder) $serverExe))) {
+    Write-Progress-File -State 'downloading' -Message "Preparing backend $($selectedBackend.name)"
+    Ensure-Backend -Backend $selectedBackend -ToolsDirectory $toolsDirectory `
       -DownloadsDirectory $downloadsDirectory -ServerExe $serverExe -CurlCommand $curlCommand
   }
 }

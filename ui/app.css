@@ -97,6 +97,7 @@ h1 { font-size: 22px; margin: 0 0 4px; }
 .progress .item { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
 .progress .track { height: 12px; background: var(--panel-2); border-radius: 999px; overflow: hidden; margin-top: 10px; }
 .progress .fill { height: 100%; background: var(--accent); width: 0; transition: width .4s linear; }
+.server-error { margin: 0; padding: 14px 16px; max-height: 360px; overflow: auto; white-space: pre-wrap; word-break: break-word; background: rgba(255,107,107,.08); border: 1px solid rgba(255,107,107,.45); border-radius: 12px; color: var(--bad); font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; vertical-align: -2px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 

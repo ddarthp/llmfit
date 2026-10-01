@@ -30,10 +30,7 @@ $serverConfig = Read-JsonConfig -Name 'server.json' -Root $root
 
 $uiPort = if ($Port -gt 0) { $Port } elseif ($serverConfig.uiPort) { [int]$serverConfig.uiPort } else { 8089 }
 $modelKeys = @($catalog.Keys | Where-Object { -not $_.StartsWith('_') })
-$backendKeys = @($backends.Keys | Where-Object {
-  -not $_.StartsWith('_') -and $backends[$_].platform -eq $platform -and
-  ((-not $backends[$_].architecture) -or $backends[$_].architecture -eq $architecture)
-})
+$backendKeys = Get-AvailableBackendKeys -Backends $backends -Platform $platform -Architecture $architecture -OnLinux $onLinux
 
 $platformConfig = $serverConfig.platforms[$platform]
 $deviceReserveMiB = [double]$platformConfig.deviceReserveMiB
@@ -91,6 +88,26 @@ function Get-SystemRamMiB {
   return 0
 }
 
+function Get-LlamaServerStartupError {
+  # The panel normally stays quiet: it only exposes log output once the most
+  # recent server launch has stopped and llama.cpp wrote an actual failure.
+  # This keeps routine successful runs from becoming a scrolling log viewer.
+  param([datetime]$StartedAt)
+  $logPath = Join-Path $root 'llama-server.log'
+  if (-not (Test-Path -LiteralPath $logPath)) { return $null }
+  try {
+    $item = Get-Item -LiteralPath $logPath -ErrorAction Stop
+    if ($item.LastWriteTimeUtc -lt $StartedAt.ToUniversalTime()) { return $null }
+    $lines = @(Get-Content -LiteralPath $logPath -Tail 32 -ErrorAction Stop |
+      Where-Object { $_ -and $_.Trim() } |
+      ForEach-Object { if ($_.Length -gt 512) { $_.Substring(0, 512) + '…' } else { $_ } })
+    if (-not ($lines -match '(?i)(out of memory|cudamalloc failed|failed to (allocate|load|start|listen|bind|initialize|open)|assert.*failed|ggml_assert|aborted?|unknown (option|argument)|invalid (option|argument)|unrecognized (option|argument)|model.*not found|cannot (open|load|bind|listen)|fatal)')) { return $null }
+    return (($lines | Select-Object -Last 24) -join "`n")
+  } catch {
+    return $null
+  }
+}
+
 function Get-ServerState {
   # What is running, asked of the server rather than of a file we wrote: a
   # PID file says what was started, /health says what is answering.
@@ -116,6 +133,16 @@ function Get-ServerState {
   }
   if (Test-Path -LiteralPath $statePath) {
     try { $state.launched = (Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json) } catch {}
+  }
+  if ($state.running -and $state.launched.serverStartedAt -and -not $state.launched.serverReadyAt) {
+    # Once it has answered /health it was a successful start, even if it later
+    # stops. Persist that fact so an ordinary runtime error is never shown as a
+    # startup failure after the user presses Stop.
+    $state.launched | Add-Member -NotePropertyName serverReadyAt -NotePropertyValue (Get-Date).ToString('o') -Force
+    [System.IO.File]::WriteAllText($statePath, ($state.launched | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
+  }
+  if (-not $state.running -and -not $state.loading -and $state.launched.serverStartedAt -and -not $state.launched.serverReadyAt -and -not $state.launched.serverStopRequested) {
+    try { $state.startupError = Get-LlamaServerStartupError -StartedAt ([datetime]$state.launched.serverStartedAt) } catch {}
   }
   return $state
 }
@@ -191,6 +218,7 @@ function Get-FitPayload {
   $backendKey = [string]$Request.backendKey
   $backend = $backends[$backendKey]
   if (-not $backend) { throw "Unknown backend: $backendKey" }
+  if ($backendKeys -notcontains $backendKey) { throw "Backend is not available on this machine: $backendKey" }
   $useVision = [bool]$Request.vision
   $cacheType = [string]$Request.cacheType
   if (-not $cacheType) { $cacheType = (Get-CacheType -Model $model -ServerConfig $serverConfig -Platform $platform).Type }
@@ -239,6 +267,7 @@ function Start-Run {
   $backendKey = [string]$Request.backendKey
   $model = $catalog[$modelKey]
   if (-not $model) { throw "Unknown model key: $modelKey" }
+  if ($backendKeys -notcontains $backendKey) { throw "Backend is not available on this machine: $backendKey" }
   $useVision = [bool]$Request.vision
   $useSpec = [bool]$Request.spec
   $context = [int]$Request.context
@@ -287,6 +316,10 @@ function Start-Server {
   if ($launched.vision) { $serveArguments += '-Vision' }
   if ($launched.spec) { $serveArguments += '-Spec' }
   Stop-Server | Out-Null
+  $launched | Add-Member -NotePropertyName serverStartedAt -NotePropertyValue (Get-Date).ToString('o') -Force
+  $launched | Add-Member -NotePropertyName serverReadyAt -NotePropertyValue $null -Force
+  $launched | Add-Member -NotePropertyName serverStopRequested -NotePropertyValue $false -Force
+  [System.IO.File]::WriteAllText($statePath, ($launched | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
   Start-Detached -Arguments $serveArguments -LogPath (Join-Path $root 'llama-server.log')
   return @{ started = $true }
 }
@@ -297,6 +330,13 @@ function Stop-Server {
     Where-Object { $_.Path -and $_.Path.StartsWith($toolsDirectory, [System.StringComparison]::OrdinalIgnoreCase) } |
     ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue; $stopped++ }
   if ($stopped) { Start-Sleep -Milliseconds 500 }
+  if (Test-Path -LiteralPath $statePath) {
+    try {
+      $launched = Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json
+      $launched | Add-Member -NotePropertyName serverStopRequested -NotePropertyValue $true -Force
+      [System.IO.File]::WriteAllText($statePath, ($launched | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
+    } catch {}
+  }
   return @{ stopped = $stopped }
 }
 

@@ -70,22 +70,70 @@ function Expand-Package {
   }
 }
 
+function Get-BackendIntegrityManifestPath {
+  param($Backend, [string]$ToolsDirectory)
+  return (Join-Path (Join-Path $ToolsDirectory '.llmfit-integrity') "$($Backend.folder).json")
+}
+
+function Write-BackendIntegrityManifest {
+  # Some upstream releases publish one digest per archive but no digest for the
+  # union of their extracted trees. Once those archives have passed SHA-256,
+  # record SHA-256 for every extracted file. This is deliberately stronger than
+  # the count/size manifests used for the older single archives: a later USB
+  # copy or disk error cannot turn into a valid install merely by preserving the
+  # same number of files and bytes.
+  param($Backend, [string]$ToolsDirectory)
+  $destination = Join-Path $ToolsDirectory $Backend.folder
+  $root = (Resolve-Path -LiteralPath $destination).Path.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+  $files = @(
+    Get-ChildItem -LiteralPath $destination -Recurse -File | ForEach-Object {
+      [ordered]@{
+        path = $_.FullName.Substring($root.Length).TrimStart([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar).Replace('\', '/')
+        sha256 = (Get-Sha256 -Path $_.FullName)
+      }
+    } | Sort-Object path
+  )
+  if (-not $files.Count) { throw "Cannot create an integrity manifest for an empty backend: $destination" }
+  $manifest = [ordered]@{ folder = $Backend.folder; files = $files }
+  $path = Get-BackendIntegrityManifestPath -Backend $Backend -ToolsDirectory $ToolsDirectory
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null
+  $temporary = "$path.tmp"
+  [IO.File]::WriteAllText($temporary, ($manifest | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding($false)))
+  Move-Item -LiteralPath $temporary -Destination $path -Force
+}
+
 function Ensure-Backend {
   param(
     $Backend, [string]$ToolsDirectory, [string]$DownloadsDirectory,
     [string]$ServerExe, [string]$CurlCommand = 'curl'
   )
   $destination = Join-Path $ToolsDirectory $Backend.folder
-  if (Test-Path -LiteralPath (Join-Path $destination $ServerExe)) { return }
+  $manifestPath = Get-BackendIntegrityManifestPath -Backend $Backend -ToolsDirectory $ToolsDirectory
+  if ((Test-Path -LiteralPath (Join-Path $destination $ServerExe)) -and
+      ($Backend.integrityManifest -ne 'sha256' -or (Test-Path -LiteralPath $manifestPath))) { return }
   Write-Host "  Preparing backend: $($Backend.name)" -ForegroundColor Cyan
   New-Item -ItemType Directory -Force -Path $destination | Out-Null
   foreach ($archive in $Backend.archives) {
     $archivePath = Join-Path $DownloadsDirectory $archive.file
     Ensure-Artifact -Path $archivePath -Url $archive.url -Sha256 $archive.sha256 -CurlCommand $CurlCommand
+  }
+  # An extracted CUDA backend without its persisted file manifest predates this
+  # integrity contract. Rebuild it from verified archives rather than blessing
+  # unknown bytes by generating a manifest over them.
+  if ($Backend.integrityManifest -eq 'sha256' -and -not (Test-Path -LiteralPath $manifestPath) -and
+      (Test-Path -LiteralPath $destination)) {
+    Remove-Item -LiteralPath $destination -Recurse -Force
+    New-Item -ItemType Directory -Force -Path $destination | Out-Null
+  }
+  foreach ($archive in $Backend.archives) {
+    $archivePath = Join-Path $DownloadsDirectory $archive.file
     $strip = if ($archive.stripComponents) { [int]$archive.stripComponents } else { 0 }
     Expand-Package -ArchivePath $archivePath -Destination $destination -StripComponents $strip
   }
   if (-not (Test-Path -LiteralPath (Join-Path $destination $ServerExe))) {
     throw "Backend package does not contain ${ServerExe}: $destination"
+  }
+  if ($Backend.integrityManifest -eq 'sha256') {
+    Write-BackendIntegrityManifest -Backend $Backend -ToolsDirectory $ToolsDirectory
   }
 }
