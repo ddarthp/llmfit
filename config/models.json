@@ -151,6 +151,74 @@
     },
     "note": "Unsloth Q3. MTP layers are embedded in the model file."
   },
+  "qwen38-27b-q2": {
+    "name": "Qwen 3.8 27B UD-Q2_K_XL",
+    "alias": "qwen3.8-27b-q2",
+    "_maxTokensComment": "Not published for this model; taken from Qwen 3.5, which is the same family and generation and states 32,768. A ceiling only, capped further by harness.maxOutputPercent.",
+    "maxTokens": 32768,
+    "modelFile": "Qwen3.8-27B-UD-Q2_K_XL.gguf",
+    "modelUrl": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q2_K_XL.gguf?download=true",
+    "modelSha256": "fd4730dd8aad070517978752b63d530aeb1740d2283cab9fa24f1e404032ddb0",
+    "_bytesComment": "Sizes as the host reports them, so the fit table can be drawn BEFORE a 10 GB download rather than only after it. They are the SHA-256's companion, not a substitute: nothing here is trusted as a completeness check, the hash still decides that. The size and hash came from Unsloth's Hugging Face Xet pointer for this exact file.",
+    "modelBytes": 9828981664,
+    "mmprojBytes": 927607488,
+    "mmprojFile": "Qwen3.8-27B-mmproj-F16.gguf",
+    "mmprojUrl": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/mmproj-F16.gguf?download=true",
+    "mmprojSha256": "cbb841a9ee0636b2ec172f5bb8df2ea8dfeb01e90fe7c6126581d662a0b4e43e",
+    "imageMinTokens": 1024,
+    "cache": {
+      "type": "q4_0",
+      "_comment": "Q4/Q4 KV cache: the launcher sends this one type to both --cache-type-k and --cache-type-v. q4_0 is 0.5625 bytes per element in server.json. This is deliberately a per-model default so the Q2 entry fits are drawn for the configuration it launches."
+    },
+    "speculative": {
+      "specType": "ngram-map-k",
+      "costMiB": 0,
+      "autoEnable": true,
+      "_comment": "Model-free ngram speculation is the established Qwen 3.8 catalog path: it drafts from tokens already in the context window and loads no model or draft weights, so its memory cost remains zero for this quantization. Q3 measurements establish neither Q2 throughput nor acceptance; measure this exact Q2 file before making a performance claim."
+    },
+    "mtp": {
+      "mode": "embedded",
+      "autoEnable": false,
+      "_comment": "This GGUF family carries embedded MTP layers, but no MTP cost or performance measurement exists for the Q2 quantization. Keep it disabled rather than borrowing Q3 measurements; add a costMiB and enablement policy only after measuring this exact file."
+    },
+    "geometry": {
+      "kvElementsPerToken": 32768,
+      "kvElementsFixed": 0,
+      "maxContext": 262144,
+      "detail": {
+        "architecture": "qwen35",
+        "blockCount": 65,
+        "nextnLayers": 1,
+        "fullAttentionInterval": 4,
+        "attentionLayers": 16,
+        "headCountKv": 4,
+        "keyLength": 256,
+        "valueLength": 256,
+        "derivation": "65 blocks = 64 real layers + 1 nextn (MTP). 64/4 = 16 attention layers x 4 kv heads x (256+256) = 32768 per token. Quantization changes weight size, not this architecture-derived KV coefficient."
+      },
+      "summary": "hybrid attention/SSM: 16 of 65 layers hold a KV cache"
+    },
+    "sampling": {
+      "_comment": "Qwen 3.8 sampling profiles are model-family settings, not quantization settings. The published profiles match the existing Q3 catalog entry.",
+      "_source": "https://unsloth.ai/docs/models/qwen3.8",
+      "profile": "coding",
+      "profiles": {
+        "coding": {
+          "_comment": "EXTRAPOLATED, not published for this model. Qwen 3.5 documents its coding profile as its thinking profile with the temperature dropped to 0.6 and the presence penalty zeroed, leaving top_p and top_k alone; the same adjustment is applied here. Switch to 'thinking' for numbers Qwen publishes.",
+          "temperature": 0.6, "topP": 0.95, "topK": 20, "minP": 0.0, "presencePenalty": 0.0, "repeatPenalty": 1.0
+        },
+        "thinking": {
+          "_comment": "Published. Reasoning depth is a separate control: --chat-template-kwargs '{\"reasoning_effort\":\"medium\"}', where the options are xhigh (the default), medium, low and none.",
+          "temperature": 1.0, "topP": 0.95, "topK": 20, "minP": 0.0, "presencePenalty": 0.0, "repeatPenalty": 1.0
+        },
+        "instruct": {
+          "_comment": "Published, for non-thinking mode.",
+          "temperature": 0.7, "topP": 0.8, "topK": 20, "minP": 0.0, "presencePenalty": 1.5, "repeatPenalty": 1.0
+        }
+      }
+    },
+    "note": "Unsloth Q2. Q4/Q4 KV cache is the default; embedded MTP remains disabled pending Q2-specific measurements."
+  },
   "qwen36-35b-a3b": {
     "_speculativeComment": "No speculative decoding, and that is measured rather than assumed. There is no MTP to enable: the GGUF header carries no nextn key at all (searched the raw bytes; the same search finds qwen35.nextn_predict_layers and blk.64.nextn.* in Qwen 3.8 27B, so the method detects MTP where it exists), and the Unsloth repo ships no companion draft file among its 31 files. The model-free ngram families were then measured on Metal, temp 0, 200 predicted tokens, with the no-speculation arm run last so page-cache warm-up could not flatter it: against a 48.08 tok/s baseline, ngram-map-k reached 48.16, ngram-map-k4v 48.06 and ngram-simple 48.19 on a copy-heavy prompt, and 47.6-49.0 on a prompt with nothing to copy. Every variant lands within noise. The reason is the baseline itself: speculation only pays when the target forward is slow, and at 48 tok/s this mixture of experts activates ~3B parameters per token, so the drafting and verification overhead cancels the gain exactly. For contrast, the same ngram-map-k on the dense 9B lifts 29.93 to 37.63 tok/s (1.26x). Do not add a speculative block here without re-measuring.",
     "name": "Qwen 3.6 35B-A3B UD-Q3_K_XL",

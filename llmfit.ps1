@@ -192,10 +192,7 @@ $modelKeys = @($catalog.Keys | Where-Object { -not $_.StartsWith('_') })
 # be offered and then fail to execute, and neither is an x64 build on an
 # aarch64 board. A backend without an architecture runs on the only one its
 # platform has.
-$backendKeys = @($backends.Keys | Where-Object {
-  -not $_.StartsWith('_') -and $backends[$_].platform -eq $platform -and
-  ((-not $backends[$_].architecture) -or $backends[$_].architecture -eq $architecture)
-})
+$backendKeys = Get-AvailableBackendKeys -Backends $backends -Platform $platform -Architecture $architecture -OnLinux $onLinux
 if (-not $backendKeys.Count) {
   throw "config/backends.json declares no backend for platform '$platform' on $architecture."
 }
@@ -583,6 +580,32 @@ if ($useSpec) { $serveArguments += '-Spec' }
 $powerShellHost = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
 $serverLogPath = Join-Path $root 'llama-server.log'
 $serverErrorLogPath = Join-Path $root 'llama-server.err.log'
+$serverPidPath = Join-Path $root 'llama-server.pid'
+
+function Write-LlamaServerStartupFailure {
+  # On Unix the server is deliberately detached, so its stderr is not attached
+  # to this terminal. Keep that normal successful-run behaviour, but make the
+  # last lines visible when loading actually fails; an OOM is otherwise hidden
+  # in a file until somebody knows to look for it.
+  $printed = $false
+  foreach ($path in @($serverErrorLogPath, $serverLogPath)) {
+    if (-not (Test-Path -LiteralPath $path)) { continue }
+    $lines = @(Get-Content -LiteralPath $path -Tail 32 -ErrorAction SilentlyContinue |
+      Where-Object { $_ -and $_.Trim() } |
+      ForEach-Object { if ($_.Length -gt 512) { $_.Substring(0, 512) + '…' } else { $_ } })
+    if (-not $lines.Count) { continue }
+    if (-not $printed) {
+      Write-Host ''
+      Write-Host '  llama.cpp stopped while loading. Its final output was:' -ForegroundColor Red
+      $printed = $true
+    }
+    Write-Host "  From ${path}:" -ForegroundColor DarkGray
+    $lines | ForEach-Object { Write-Host "    $_" -ForegroundColor Yellow }
+  }
+  if (-not $printed) {
+    Write-Host '  llama.cpp stopped while loading, but wrote no log output.' -ForegroundColor Red
+  }
+}
 
 if ($onWindows) {
   # -NoExit keeps the console window up after the server stops, so whatever it
@@ -611,9 +634,10 @@ if ($onWindows) {
   # that started it closing.
   $quoted = @($powerShellHost, '-NoProfile', '-File', $serveScript) + $serveArguments |
     ForEach-Object { ConvertTo-ShellQuoted $_ }
+  Remove-Item -LiteralPath $serverPidPath -Force -ErrorAction SilentlyContinue
   $command = 'nohup ' + ($quoted -join ' ') +
     ' > ' + (ConvertTo-ShellQuoted $serverLogPath) +
-    ' 2> ' + (ConvertTo-ShellQuoted $serverErrorLogPath) + ' < /dev/null &'
+    ' 2> ' + (ConvertTo-ShellQuoted $serverErrorLogPath) + ' < /dev/null & echo $! > ' + (ConvertTo-ShellQuoted $serverPidPath)
   # The call operator passes argv straight through on Unix. Start-Process would
   # join and re-parse it, splitting this command on its spaces.
   & '/bin/sh' '-c' $command
@@ -622,15 +646,37 @@ if ($onWindows) {
 Write-Host ''
 Write-Host '  Loading the model...' -ForegroundColor Cyan
 $ready = $false
+$serverWasObserved = $false
+$serverLaunchPid = $null
 for ($attempt = 0; $attempt -lt 300; $attempt++) {
   try {
     if ((Invoke-RestMethod -Uri "$apiRoot/health" -TimeoutSec 2).status -eq 'ok') { $ready = $true; break }
   } catch {}
+  if (-not $onWindows) {
+    # The shell writes the PowerShell runner's PID as part of launch. That
+    # closes the race where llama-server can fail before the first poll sees
+    # its process (the common CUDA OOM case).
+    if (-not $serverLaunchPid -and (Test-Path -LiteralPath $serverPidPath)) {
+      $candidatePid = Get-Content -LiteralPath $serverPidPath -Raw -ErrorAction SilentlyContinue
+      if ($candidatePid -match '^\s*(\d+)\s*$') { $serverLaunchPid = [int]$matches[1] }
+    }
+    if ($serverLaunchPid -and -not (Get-Process -Id $serverLaunchPid -ErrorAction SilentlyContinue)) { break }
+    # Do not make an OOM wait for the full five-minute readiness window. The
+    # server may take time to reach /health, but once its process was observed
+    # and has gone away it cannot become ready without another launch.
+    $serverRunning = @(Get-Process -Name 'llama-server' -ErrorAction SilentlyContinue |
+      Where-Object { $_.Path -and $_.Path.StartsWith($toolsDirectory, [System.StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
+    if ($serverRunning) { $serverWasObserved = $true }
+    elseif ($serverWasObserved) { break }
+  }
   Start-Sleep -Seconds 1
 }
 if (-not $ready) {
-  $where = if ($onWindows) { 'Check the server window.' } else { "Check $serverErrorLogPath" }
-  throw "llama.cpp was not ready within 300 seconds. $where"
+  if ($onWindows) {
+    throw 'llama.cpp was not ready within 300 seconds. Check the server window for its output.'
+  }
+  Write-LlamaServerStartupFailure
+  throw "llama.cpp was not ready. The llama-server output above was read from $serverErrorLogPath and $serverLogPath."
 }
 
 # Whatever the estimate said, Windows has the final word. Ask it directly

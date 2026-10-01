@@ -55,6 +55,42 @@ function Test-Tree {
   return $true
 }
 
+function Test-BackendIntegrityManifest {
+  param([string]$Path, [string]$ManifestPath, [string]$Label)
+  if (-not (Test-Path -LiteralPath $ManifestPath)) {
+    $script:problems += "$Label is missing its SHA-256 integrity manifest: $ManifestPath"
+    Write-Host "FAIL: $Label - integrity manifest missing" -ForegroundColor Red
+    return $false
+  }
+  try { $manifest = Get-Content -Raw -LiteralPath $ManifestPath | ConvertFrom-Json } catch {
+    $script:problems += "$Label has an unreadable SHA-256 integrity manifest: $ManifestPath"
+    Write-Host "FAIL: $Label - integrity manifest unreadable" -ForegroundColor Red
+    return $false
+  }
+  $root = (Resolve-Path -LiteralPath $Path).Path.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+  $actual = @{}
+  Get-ChildItem -LiteralPath $Path -Recurse -File | ForEach-Object {
+    $relative = $_.FullName.Substring($root.Length).TrimStart([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar).Replace('\', '/')
+    $actual[$relative] = $_.FullName
+  }
+  $expected = @($manifest.files)
+  if (-not $expected.Count -or $actual.Count -ne $expected.Count) {
+    $script:problems += "$Label integrity manifest does not match its extracted file set"
+    Write-Host "FAIL: $Label - file set differs from integrity manifest" -ForegroundColor Red
+    return $false
+  }
+  foreach ($entry in $expected) {
+    if (-not $actual.ContainsKey($entry.path) -or (Get-FileHash -Algorithm SHA256 -LiteralPath $actual[$entry.path]).Hash.ToLowerInvariant() -ne $entry.sha256) {
+      $script:problems += "$Label integrity manifest does not match: $($entry.path)"
+      Write-Host "FAIL: $Label - hash mismatch" -ForegroundColor Red
+      return $false
+    }
+  }
+  $script:verified += $Label
+  Write-Host "OK: $Label ($($expected.Count) SHA-256 files)" -ForegroundColor Green
+  return $true
+}
+
 Write-Host ''
 $mode = if ($Full) { 'full (requires the whole catalog)' } else { 'installed (only what is present)' }
 Write-Host "Verifying the package. Mode: $mode" -ForegroundColor Cyan
@@ -107,7 +143,15 @@ foreach ($property in $backends.PSObject.Properties) {
     continue
   }
 
-  Test-Tree -Path $folder -Files $backend.tree.files -Bytes $backend.tree.bytes -Label "backend $($property.Name)" | Out-Null
+  if ($backend.tree) {
+    Test-Tree -Path $folder -Files $backend.tree.files -Bytes $backend.tree.bytes -Label "backend $($property.Name)" | Out-Null
+  } elseif ($backend.integrityManifest -eq 'sha256') {
+    $manifestPath = Join-Path (Join-Path (Join-Path $root 'tools') '.llmfit-integrity') "$($backend.folder).json"
+    Test-BackendIntegrityManifest -Path $folder -ManifestPath $manifestPath -Label "backend $($property.Name)" | Out-Null
+  } else {
+    $problems += "backend $($property.Name) declares neither tree nor SHA-256 integrity manifest"
+    Write-Host "FAIL: backend $($property.Name) - no integrity contract" -ForegroundColor Red
+  }
   foreach ($archive in $backend.archives) {
     $archivePath = Join-Path (Join-Path $root 'downloads') $archive.file
     if (Test-Path -LiteralPath $archivePath) {

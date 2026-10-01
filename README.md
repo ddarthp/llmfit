@@ -712,9 +712,11 @@ Three things, and the second is the one to read before trusting a number. Everyt
 
 That is a class rather than a single unit. The **ROG Ally X** is the same Z1 Extreme with the same 24 GB; the **ROG Xbox Ally X** pairs a newer RDNA3.5 iGPU with the same 24 GB and the same budget; a **Legion Go S with 32 GB** has more room again, and ships with SteamOS on some configurations. Any Ryzen APU desktop or mini-PC with 24 GB or more of system RAM lands in the same place. What they have in common is the thing that matters here: one pool of memory, and a Linux kernel willing to let a Vulkan process reach most of it.
 
-### The catalog carries Vulkan and CPU only
+### Linux selects CUDA when an NVIDIA driver is available
 
-No CUDA build, no ROCm build. An NVIDIA card works, through Vulkan like every other GPU, which costs speed that a CUDA build would not. Adding one is a `backends.json` entry with a URL, a SHA-256 and the file and byte counts of the extracted tree — the same five fields every other backend has — and nothing in the launcher needs to change for it.
+On x64 Linux, `llmfit` runs `nvidia-smi` before it builds the architecture menu. If it can query at least one NVIDIA device, **CUDA 13.3** appears and is recommended; the matching CUDA runtime archive is fetched beside llama.cpp, so a CUDA toolkit is not required. The launcher persists SHA-256 hashes for every file extracted from the two verified archives, so `VERIFY` remains able to detect corruption after those archives are deleted. If that driver check fails, the menu still offers **Vulkan** for AMD, Intel and NVIDIA hardware and **CPU** as the no-acceleration fallback. ARM64 remains Vulkan/CPU only.
+
+ROCm is still not in the catalog. An NVIDIA card without a usable driver can use Vulkan, but it will not receive the CUDA package it cannot start.
 
 Speculative decoding **is** on for the Linux Vulkan backend, and unlike everywhere else in this catalog it was measured to pay. Qwen 3.6 35B-A3B from its MTP build, 32K with vision and a q8_0 cache on a gfx1103 iGPU: **28.2–28.6 tok/s without, 37.5–38.3 with**, at draft acceptance 0.71–0.73 and mean draft length 3.1. That is 1.33x, above the 1.15–1.25x the vendor claims for MoE models.
 
@@ -1093,7 +1095,7 @@ pkill -x llama-server                            # macOS
 - Overhead constants measured on Apple Silicon and on Linux for the rest of the catalog, so every fit table is calibrated rather than borrowed from CUDA. One entry of seven is measured on Linux today, none on Metal
 - The plain Qwen 3.6 35B-A3B has no measured overhead on any platform, which makes it the one entry whose estimated total is a guess everywhere
 - Whether a quantized KV cache costs anything on Metal, measured rather than left as an open question
-- CUDA and ROCm backends for Linux, so an NVIDIA or AMD card is not limited to Vulkan there. ROCm is blocked today on RDNA3 iGPUs by the runtime rather than by the catalog; [what is different on Linux](#what-is-different-on-linux) records exactly where it stops
+- A ROCm backend for Linux, so AMD hardware is not limited to Vulkan. It is blocked today on RDNA3 iGPUs by the runtime rather than by the catalog; [what is different on Linux](#what-is-different-on-linux) records exactly where it stops
 - Intel Macs (the `macos-x64` build)
 - More models in the catalog
 

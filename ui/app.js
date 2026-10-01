@@ -32,6 +32,9 @@ const mib = (value) => {
   return value >= 1024 ? `${(value / 1024).toFixed(1)} GiB` : `${Math.round(value)} MiB`;
 };
 const k = (context) => `${context / 1024}K`;
+const escapeHtml = (value) => String(value)
+  .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+  .replaceAll('"', '&quot;').replaceAll("'", '&#039;');
 
 async function api(path, body) {
   const options = body
@@ -197,6 +200,12 @@ function runScreen() {
   }
 
   if (!server.running) {
+    if (server.startupError) {
+      return `<h1>llama.cpp could not start</h1>
+        <p class="sub">The server stopped while loading. Its final output is below.</p>
+        <pre class="server-error">${escapeHtml(server.startupError)}</pre>
+        <div class="actions"><button class="btn primary" data-nav data-action="back">Choose a smaller fit</button></div>`;
+    }
     return `<h1>Nothing loaded</h1>
       <p class="sub">Pick a model and it will be here.</p>
       <div class="actions"><button class="btn primary" data-nav data-action="back">Choose a model</button></div>`;

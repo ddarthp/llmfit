@@ -109,6 +109,32 @@
       }
     ]
   },
+  "cuda-linux": {
+    "_comment": "Shown only when nvidia-smi confirms that the Linux host has a working NVIDIA device. The archive includes llama.cpp; its matching cudart archive supplies the CUDA 13.3 user-space libraries, so users need an NVIDIA driver but do not need a CUDA toolkit. Vulkan and CPU remain available when this check fails.",
+    "name": "NVIDIA CUDA 13.3 (GeForce RTX 20/30/40/50, Quadro, Tesla)",
+    "platform": "linux",
+    "architecture": "x64",
+    "requiresCuda": true,
+    "folder": "llama.cpp-cuda-linux",
+    "gpuLayers": 999,
+    "pinDevice": true,
+    "speculativeDecoding": true,
+    "integrityManifest": "sha256",
+    "archives": [
+      {
+        "file": "llama-cuda-linux-x64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10976/llama-b10976-bin-ubuntu-cuda-13.3-x64.tar.gz",
+        "sha256": "575d8e9a5550689905e18072344623031fb70cf403ee1d024843e684702ccac0",
+        "stripComponents": 1
+      },
+      {
+        "file": "cudart-cuda-linux-x64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10976/cudart-llama-b10976-bin-ubuntu-cuda-13.3-x64.tar.gz",
+        "sha256": "fc12075c57e9ac59da383528de2ee3e8e1d4711ee322a8ca88fa9561be7985bf",
+        "stripComponents": 1
+      }
+    ]
+  },
   "cpu-linux": {
     "name": "CPU x64 (no acceleration; considerably slower)",
     "platform": "linux",
