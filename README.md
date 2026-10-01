@@ -69,7 +69,7 @@ Nothing else, and nothing installed. The harnesses (Pi, OpenCode, Codex) are opt
 
 Intel Macs are not supported: the catalog carries the `macos-arm64` build of `llama.cpp` only.
 
-**What Linux does not have yet.** There is no CUDA or ROCm backend in the catalog: an NVIDIA card runs through Vulkan here like any other, and ROCm is blocked by the runtime rather than by the catalog — see [what is different on Linux](#what-is-different-on-linux) for the measurements behind that. The overhead constants behind the estimated totals were measured on CUDA under Windows, so on Linux the KV column is exact while the estimated total is borrowed for every model except `qwen36-35b-a3b-mtp`, which was measured there. `config/server.json` carries a smaller safety margin on Linux than on Windows, because Linux fails an allocation that does not fit instead of quietly paging it into system RAM.
+**What Linux does not have yet.** No ROCm backend: AMD hardware is served through Vulkan, and ROCm is blocked by the runtime rather than by the catalog — see [what is different on Linux](#what-is-different-on-linux) for where it stops. CUDA is in the catalog there (x64, offered only when `nvidia-smi` answers). The overhead constants behind the estimated totals were measured on CUDA under Windows for most of the catalog, so on Linux the KV column is exact while the estimated total is borrowed for every model except `qwen36-35b-a3b-mtp`, `qwen38-27b-gsq-iq2xs` and `qwen38-27b-gsq-iq3xxs`, which were measured on Linux. `config/server.json` carries a smaller safety margin on Linux than on Windows, because Linux fails an allocation that does not fit instead of quietly paging it into system RAM.
 
 ### What your machine has to be
 
@@ -482,7 +482,7 @@ No weights, no binaries, no encoders. They are downloaded on first use and verif
 | Model weights (`.gguf`) | Hugging Face — `unsloth/Qwen3.5-9B-GGUF`, `unsloth/Qwen3.8-27B-GGUF`, `unsloth/Qwen3.6-35B-A3B-GGUF`, `unsloth/Qwen3.6-35B-A3B-MTP-GGUF`, `unsloth/gemma-4-*-it-qat-GGUF` | 4.2–17.2 GB each |
 | Vision encoders (`mmproj`) | The same repositories | 175 MB – 1.2 GB each |
 | Speculative draft models (`mtp-*.gguf`) | The same repositories | 57–254 MB, only fetched when speculation needs one |
-| `llama.cpp` binaries | Official GitHub release artifacts (`ggml-org/llama.cpp`, build `b10566`) | 13–510 MB depending on platform |
+| `llama.cpp` binaries | Official GitHub release artifacts (`ggml-org/llama.cpp`) — build `b10566` for the Windows, macOS and ARM64 packages, `b10976` for the two Linux x64 GPU backends | 13–510 MB depending on platform |
 | PowerShell 7 (macOS and Linux) | Official GitHub release artifact (`PowerShell/PowerShell`, `v7.6.5`) | 68–73 MB, 170–183 MB extracted |
 
 Every one of those is declared in `config/` with its URL and SHA-256, and the model entries now also declare the size the host reports. Nothing is fetched that the catalog did not name.
@@ -507,6 +507,8 @@ Model weights belong to their respective publishers under their own licenses.
 | Gemma 4 E4B QAT | `gemma4-e4b-qat` | 4.22 GB | 990 MB | 2.0 GiB | 128K | draft model |
 | Gemma 4 12B QAT | `gemma4-12b-qat` | 6.72 GB | 175 MB | 2.3 GiB | 256K | draft model |
 | Qwen 3.5 9B Q6_K | `qwen3.5-9b-q6` | 7.46 GB | 876 MB | 4.0 GiB | 256K | — |
+| Qwen 3.8 27B GSQ-RCO IQ2_XS (MTP) | `qwen3.8-27b-gsq-iq2xs` | 8.77 GB | 931 MB | 8.0 GiB | 256K | embedded |
+| Qwen 3.8 27B GSQ-RCO IQ3_XXS (MTP) | `qwen3.8-27b-gsq-iq3xxs` | 10.44 GB | 931 MB | 8.0 GiB | 256K | embedded |
 | Qwen 3.8 27B UD-Q3_K_XL | `qwen3.8-27b-q3` | 13.15 GB | 885 MB | 8.0 GiB | 256K | embedded |
 | Gemma 4 26B-A4B QAT | `gemma4-26b-a4b-qat` | 14.25 GB | 1.19 GB | 2.7 GiB | 256K | draft model |
 | Qwen 3.6 35B-A3B UD-Q3_K_XL | `qwen3.6-35b-a3b-q3` | 16.85 GB | 899 MB | 2.5 GiB | 256K | separate build |
@@ -514,9 +516,9 @@ Model weights belong to their respective publishers under their own licenses.
 
 The middle column is the name your harness needs — see [using it from your editor](#using-it-from-your-editor). `config/models.json` keys them slightly differently (`gemma4-e4b` rather than `gemma4-e4b-qat`); the key is only for `serve.ps1 -ModelKey`.
 
-All of them are Unsloth quantizations with an optional vision encoder. **KV figures are at `f16`**, so they are 3.2× the `q4_1` numbers an earlier revision of this table carried — the default changed and the table did not follow it. The two 35B-A3B entries are the ones that ship with a quantized cache — on macOS for both, and on Linux for the MTP build, where it is measured; see below.
+Seven of the nine are Unsloth quantizations. The two `GSQ-RCO` rows are not: they come from the IST-DASLab release of the same base model, where a gradient search assigns a quantization type per tensor under a size budget instead of applying one type to the whole file. They are standard GGUF and the launcher treats them like any other entry — with their own encoder, because the BF16 `mmproj` in that repository is a different artifact from Unsloth's F16 one and the hashes do not match. All nine carry an optional vision encoder. **KV figures are at `f16`**, so they are 3.2× the `q4_1` numbers an earlier revision of this table carried — the default changed and the table did not follow it. The two 35B-A3B entries are the ones that ship with a quantized cache — on macOS for both, and on Linux for the MTP build, where it is measured; see below.
 
-The whole catalog is **86 GB**: 80 GB of weights, 6 GB of encoders and 0.6 GB of draft models, plus a backend between 30 MB and 850 MB depending on the platform. You only ever download what you pick, and the sizes above are what the launcher prints next to a model you have not downloaded yet.
+The whole catalog is **107 GB**: 99 GB of weights, 7 GB of encoders and 0.6 GB of draft models, plus a backend between 30 MB and 850 MB depending on the platform. You only ever download what you pick, and the sizes above are what the launcher prints next to a model you have not downloaded yet.
 
 ### A model can pick its own KV cache type
 
@@ -889,7 +891,7 @@ Every file `llmfit` touches is backed up next to the original as `.llmfit-backup
 
 ## Reference measurements
 
-Five of the seven catalog entries have been measured against `nvidia-smi` on a 16 GB NVIDIA card — the class a 4080, a 5070 Ti or a 5080 belongs to. A 24 GB card (3090, 4090) or a 32 GB one (5090) runs the same arithmetic with more room; what changes is the budget in step 1, not the constants below. **Every figure in this first part is CUDA**; the integrated-GPU sections below are separate measurements on their own hardware, and [what is different on macOS](#what-is-different-on-macos) covers Metal. A sample:
+Seven of the nine catalog entries have been measured against `nvidia-smi` on a 16 GB NVIDIA card — the class a 4080, a 5070 Ti or a 5080 belongs to. Five of those seven were measured on CUDA under Windows; the two `GSQ-RCO` 27B files were measured on CUDA under Linux, which is the same driver and a different operating system, and they are also the only entries with a Vulkan measurement taken on the same machine as their CUDA one. A 24 GB card (3090, 4090) or a 32 GB one (5090) runs the same arithmetic with more room; what changes is the budget in step 1, not the constants below. **Every figure in this first part is CUDA**; the integrated-GPU sections below are separate measurements on their own hardware, and [what is different on macOS](#what-is-different-on-macos) covers Metal. A sample:
 
 | Configuration | Estimated | VRAM used | Generation |
 | --- | --- | --- | --- |
@@ -919,11 +921,15 @@ Overhead constants per model, all measured:
 | Qwen 3.8 27B | −389 MiB | +251 MiB | 0 MiB model-free; the embedded MTP it no longer uses cost +1200 | CUDA |
 | Qwen 3.6 35B-A3B | — | — | none declared | nothing, anywhere |
 | Qwen 3.6 35B-A3B (MTP) | −205 MiB | +251 MiB | +801 MiB, embedded | Vulkan, `gfx1103` |
+| Qwen 3.8 27B GSQ-RCO IQ2_XS (MTP) | 0 MiB | +250 MiB | +1100 MiB, embedded | CUDA and Vulkan, Linux |
+| Qwen 3.8 27B GSQ-RCO IQ3_XXS (MTP) | 0 MiB | +260 MiB | +1100 MiB, embedded | CUDA and Vulkan, Linux |
 | Gemma 4 E4B | −1207 MiB | +202 MiB | +66 MiB, draft model | CUDA |
 | Gemma 4 12B | +347 MiB | +177 MiB | +294 MiB, draft model | CUDA |
 | Gemma 4 26B-A4B | +313 MiB | +142 MiB | +292 MiB, estimated | CUDA |
 
 A negative base means part of the file never reaches VRAM: metadata and tokenizer tables are counted in the file size, for the 27B so are the `blk.64` tensors llama.cpp skips when MTP is off, and for the 35B-A3B MTP build it is the 515 MiB llama.cpp keeps in a host buffer. A model with no measured values — the plain 35B-A3B is the one left — falls back to the defaults in `config/server.json`, which stay deliberately pessimistic, and the launcher says on screen that it is doing so.
+
+The two `GSQ-RCO` rows carry a base of **0 MiB**, which is not the same claim as "never measured" — that state is visible, it prints a warning, and it borrows `config/server.json`. Four measurements at 32K with an `f16` cache and no vision put the residual at **+62 MiB** (CUDA) and **+26 MiB** (iGPU) for the IQ2_XS file, **−62** and **+5** for the IQ3_XXS file. The idle baseline the deltas are taken against moved by 248 MiB between runs, so anything under ~60 MiB is not a constant, it is the noise floor of the method. 0 is the honest number for a file this tight: what never reaches the GPU (metadata, tokenizer, the skipped `blk.64` head) is balanced by what the compute buffers add back.
 
 ### The same models on an integrated GPU, on Windows
 
@@ -996,6 +1002,43 @@ The MTP draft cache is **64 MiB at 32K, one layer, and `f16` whatever `--cache-t
 Seven percent of prompt processing and three of generation, against the 84× collapse the same change causes on CUDA.
 
 **The companion draft runs here and buys nothing.** Gemma 4 E4B at 32K, temp 0, 200 predicted tokens, two runs per arm: 27.15 and 25.58 tok/s with its draft model, 25.82 and 28.59 without, at acceptance 0.33–0.34. Overlapping ranges, so the Gemma entries turn it off on Linux.
+
+### The same 27B on CUDA and on an iGPU, in one sitting
+
+Two things made this round worth taking. The catalog had never compared its own two Linux backends on one machine in one session — the `vulkan-linux` package was moved to `b10976`, the build `cuda-linux` already carried, so the two columns below differ by driver and not by release. And the catalog had never carried a file whose whole reason for existing is the draft head.
+
+`qwen38-27b-gsq-iq2xs` (8.77 GB) and `qwen38-27b-gsq-iq3xxs` (10.44 GB) were each loaded through `serve.ps1` at 32K with an `f16` cache on an RTX 5070 Ti (16 GB dedicated, `cuda-linux`) and on the Radeon 780M in the same machine (45 GB of DDR5 shared with the CPU, `vulkan-linux`, device pinned to the iGPU). Temperature 0, `top_k` 1, 200 predicted tokens, two repetitions per arm. One prompt invites the model to keep copying code already in the context; the other asks for an argument written from nothing.
+
+| Generation, tok/s | IQ2_XS · CUDA | IQ3_XXS · CUDA | IQ2_XS · 780M | IQ3_XXS · 780M |
+| --- | --- | --- | --- | --- |
+| No speculation — copy | 64.4 | 56.4 | 7.5 | 6.8 |
+| Embedded MTP — copy | **115.7** | **100.8** | **15.4** | **12.3** |
+| | 1.80× | 1.79× | 2.06× | 1.81× |
+| No speculation — nothing to copy | 64.8 | 56.7 | 7.5 | 6.8 |
+| Embedded MTP — nothing to copy | 95.5 | 84.6 | 12.4 | 10.5 |
+| | 1.47× | 1.49× | 1.65× | 1.54× |
+| `ngram-map-k` — copy | 57.5 | 53.6 | 6.3 | 5.9 |
+| | 0.90× | 0.92× | 0.84× | 0.87× |
+| Prompt processing, 1576 tokens | 1443 → 1153 with MTP | 1472 → 1319 with MTP | 58 → 78 | 69 → 62 |
+
+Draft acceptance ran 0.63–0.91 with a mean draft length of 2.88–3.69 — the head is guessing well on both backends. What is new is not that MTP pays somewhere on Linux (the 35B-A3B MTP build already did, at 1.33×), it is that **the dense 27B pays it too, and pays it more than the mixture of experts ever did.**
+
+*How to read the columns: the CUDA rows and the IQ2_XS iGPU rows come from the hash-checked pass, where every repetition sent the same prompt bytes. The IQ3_XXS iGPU rows come from the pass before it, which appended a per-repetition label to the prompt. Every ratio is taken inside a single pass against that pass's own no-speculation arm, so the four columns are not four measurements of one thing: on the iGPU the same ngram arm read 6.2–6.5 tok/s in the hash-checked pass and 5.3–5.5 in the first, on a machine whose memory is the CPU's. The direction never moved — model-free speculation lost on every pass, on every backend, on both files.*
+
+**Speculation is not free of risk to the answer, on one of these paths.** Every arm was checked by hashing the generated text, not only by counting tokens. `ngram-map-k` produced byte-identical output to the no-speculation baseline on both prompt shapes, on both backends, as it always has. Embedded MTP on the **iGPU** did the same. Embedded MTP on **CUDA did not**: on the copy prompt it matched byte for byte, and on the free-generation prompt it did not — `8e546bdb65c8` without the draft, `beed631b2d56` with it, same file, same seed, same prompt bytes, at temperature 0. The IQ3_XXS file reproduced the split on the same backend. The plausible mechanism is that verifying a multi-token draft advances the recurrent state of this hybrid architecture in one batched pass where single-token decoding steps it one position at a time, and a batched update is not bit-identical to a stepped one — at temperature 0 a small numeric difference can flip an argmax and everything downstream follows. That part is a hypothesis about why; what is measured is that the text differs. So a harness that needs reproducible output has to ask for `--spec-type none`, and a speedup quoted from this table is quoted with that caveat attached.
+
+**Memory, and what the fit table now carries.** Resident was sampled the same way on both backends: `nvidia-smi` on the card, `mem_info_vram_used + mem_info_gtt_used` against an idle baseline on the iGPU.
+
+| IQ2_XS at 32K | Predicted | CUDA | 780M |
+| --- | --- | --- | --- |
+| No vision, no speculation | 10413 MiB | 10475 | 10421–10439 |
+| With vision | 11551 MiB | 11613 | 11570 |
+| With vision and MTP | 12951 MiB | — | 12682 |
+| No vision, with MTP | 11813 MiB | 11513 | 11539–11597 |
+
+Four no-vision measurements sit between **−62 and +62 MiB** of the weights-plus-cache figure, which is inside the drift of the idle baseline itself (it moved 248 MiB between runs), so both entries carry a base overhead of **0** rather than a constant nobody can resolve. The encoder costs **+243 to +277** on top of its own 888 MiB, so they carry 250 and 260. The draft context costs **1038–1176 MiB at load and 1058–1651 after a generation** — the entries carry **1400**, which over-charges the 16 GB CUDA card by about 350 MiB and keeps the smallest shared-memory machine inside its real cost. That is the same flat-number weakness the `maxContext` ceiling on `qwen38-27b` exists for, and it is listed as open.
+
+**The two claims this leaves standing.** [The Qwen 3.8 27B section above](#speculative-decoding-is-available-and-what-pays-is-not-what-everyone-assumes) reports embedded MTP at 0.86×/0.65× and `ngram-map-k` at 1.26× on Metal for the same architecture. Both measurements are untouched; what no longer survives is the architectural reading of them. On CUDA and on this iGPU the same nextn layer against the same hybrid attention/SSM model gives 1.5–2.1×, and the model-free method that paid on Metal gives 0.70–0.92×. "The slowest baseline gains the most" does not explain it either — the 7.5 tok/s iGPU arm posted the largest factor of the four. What is left is the least satisfying and most defensible statement in this file: **which method pays is a property of the backend and the llama.cpp build, and a number measured on one of them is a guess on the other.** That is why every speculative block here is per-platform, and why these two entries enable MTP only on Linux.
 
 ---
 
@@ -1092,7 +1135,9 @@ pkill -x llama-server                            # macOS
 
 ## Roadmap
 
-- Overhead constants measured on Apple Silicon and on Linux for the rest of the catalog, so every fit table is calibrated rather than borrowed from CUDA. One entry of seven is measured on Linux today, none on Metal
+- Overhead constants measured on Apple Silicon and on Linux for the rest of the catalog, so every fit table is calibrated rather than borrowed from CUDA. Three entries of nine are measured on Linux today (the 35B-A3B MTP build and the two `GSQ-RCO` files), none on Metal
+- The per-platform keys in `config/models.json` cannot separate the two Linux GPU backends. `overhead.linux` and `mtp.linux` hold one figure for CUDA and Vulkan together, which is fine while they agree to 36 MiB (they did for both `GSQ-RCO` files) and wrong the moment they do not — MTP already costs 1040 MiB at load on CUDA against 1136 on an iGPU and grows to 1651 there while the CUDA figure stays at 1058
+- The Linux figures for `qwen36-35b-a3b-mtp`, and the Gemma companion-draft result quoted in [what is different on Linux](#what-is-different-on-linux), were taken on `b10566`. The `vulkan-linux` backend is on `b10976` now, and the two `GSQ-RCO` entries were measured there; re-taking the older numbers on the current build is open
 - The plain Qwen 3.6 35B-A3B has no measured overhead on any platform, which makes it the one entry whose estimated total is a guess everywhere
 - Whether a quantized KV cache costs anything on Metal, measured rather than left as an open question
 - A ROCm backend for Linux, so AMD hardware is not limited to Vulkan. It is blocked today on RDNA3 iGPUs by the runtime rather than by the catalog; [what is different on Linux](#what-is-different-on-linux) records exactly where it stops

@@ -219,6 +219,168 @@
     },
     "note": "Unsloth Q2. Q4/Q4 KV cache is the default; embedded MTP remains disabled pending Q2-specific measurements."
   },
+  "qwen38-27b-gsq-iq2xs": {
+    "name": "Qwen 3.8 27B GSQ-RCO IQ2_XS (MTP)",
+    "alias": "qwen3.8-27b-gsq-iq2xs",
+    "_maxTokensComment": "Not published for this model; taken from Qwen 3.5, same family and generation, which states 32,768. A ceiling only, capped further by harness.maxOutputPercent. Same base model as the Unsloth 27B entries, so the same limit applies.",
+    "maxTokens": 32768,
+    "modelFile": "Qwen3.8-27B-GSQ-RCO-IQ2_XS-mtp.gguf",
+    "modelUrl": "https://huggingface.co/ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF/resolve/main/Qwen3.8-27B-GSQ-RCO-IQ2_XS-mtp.gguf?download=true",
+    "modelSha256": "f3369f8d36968ab7dd12f5ff11452680aef9371aa19c9922d22ccd5e58c2d9c8",
+    "_bytesComment": "Sizes as the host reports them, taken the same way as every other entry here: curl -sIL the resolve URL and read x-linked-size. Confirmed against the file on disk before this entry was written.",
+    "modelBytes": 8771311680,
+    "mmprojBytes": 931146528,
+    "mmprojFile": "mmproj-Qwen3.8-27B-BF16.gguf",
+    "mmprojUrl": "https://huggingface.co/ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF/resolve/main/mmproj-Qwen3.8-27B-BF16.gguf?download=true",
+    "mmprojSha256": "13cb7bebccbd04afc8f4090cb949ecf8937cdf7377c5799b1a0c594e7c0d3e16",
+    "_mmprojComment": "The encoder from the same repository, at BF16, and one copy serves every GSQ-RCO quantization of this base model. Deliberately NOT the Unsloth mmproj-F16 that qwen38-27b points at: different bytes, different hash, different publisher, so the two are not interchangeable even though the architecture is.",
+    "imageMinTokens": 1024,
+    "_quantComment": "GSQ-RCO is a non-uniform quantization: rather than one type for every weight tensor, a gradient search assigns a type per tensor under a total-size budget (GSQ does the low-bit scalar quantization, RCO does the assignment). The output is standard GGUF and needs no special build. What that means for this catalog: the weights are not one tensor type, so the tensor-info table in the file's own header is what to read, not the filename. Read over an HTTP range request - no download needed - this file carries 13 types: F32 (360 tensors), BF16 (96), IQ2_XXS (70), IQ2_S (60), Q2_K (53), IQ2_XS (53), IQ3_S (47), IQ3_XXS (37), IQ1_S (36), IQ1_M (31), IQ4_XS (11), Q4_K (4), Q6_K (8). Every one of them has a matmul kernel in both backends this machine runs - ggml-vulkan declares shared-memory LUTs for IQ1_S/IQ1_M/IQ2_XXS/IQ2_XS/IQ2_S/IQ3_XXS/IQ3_S/IQ4_NL/IQ4_XS, and CUDA has dequant kernels for the whole i-quant family - which is the precondition for the iGPU test being worth running at all. general.file_type reads 19 here and 26 in the IQ3_XXS file: for a mixed-precision file that field names the search's target class, not a per-tensor fact.",
+    "geometry": {
+      "kvElementsPerToken": 32768,
+      "kvElementsFixed": 0,
+      "maxContext": 262144,
+      "detail": {
+        "architecture": "qwen35",
+        "blockCount": 65,
+        "nextnLayers": 1,
+        "fullAttentionInterval": 4,
+        "attentionLayers": 16,
+        "headCountKv": 4,
+        "keyLength": 256,
+        "valueLength": 256,
+        "derivation": "Read from this file's own GGUF metadata over an HTTP range request of its first megabytes, not copied from the Unsloth entry: qwen35.block_count=65, nextn_predict_layers=1, full_attention_interval=4, attention.head_count_kv=4, key_length=256, value_length=256, context_length=262144. 65 blocks = 64 real layers + 1 nextn (MTP). 64/4 = 16 attention layers x 4 kv heads x (256+256) = 32768 elements per token. Quantization changes weight size, not this coefficient, which is exactly why a mixed-precision file gets checked the same way as a uniform one."
+      },
+      "summary": "hybrid attention/SSM: 16 of 65 layers hold a KV cache"
+    },
+    "mtp": {
+      "mode": "embedded",
+      "costMiB": 1400,
+      "_costComment": "MEASURED on both Linux backends at 32K with an f16 cache, as the delta over the same run with --spec-type none, reading nvidia-smi (CUDA) and amdgpu mem_info_vram_used + mem_info_gtt_used against an idle baseline (Vulkan). At load: 1038-1040 MiB on the RTX 5070 Ti for either file, 1100-1176 on the 780M iGPU. After a full generation it is still 1058-1060 on CUDA but 1316-1651 on the iGPU, because the draft context allocates as it is used. 1400 is inside the iGPU range and above the CUDA one: the number is set for the machine that can actually be refused by it (a 24 GB shared-memory handheld), and a 16 GB CUDA card is over-charged by ~350 MiB, which on the configurations measured here changes FITS to TIGHT and never changes a runnable configuration into an impossible one. The delta already includes the 332 MiB of blk.64 tensors that llama.cpp skips when speculation is off (it logs all fifteen as 'unused tensor ... ignoring'), so the head is paid for twice: once in the file, once in the draft context. costMiB stays flat while the draft KV scales with context, which is the same weakness the macOS ceiling on qwen38-27b exists for.",
+      "autoEnable": false,
+      "_autoEnableComment": "Off on the platforms that have never run this file (Windows CUDA, Windows Vulkan, Metal). Measured and ON for Linux in the block below.",
+      "linux": {
+        "autoEnable": true,
+        "costMiB": 1400,
+        "_comment": "MEASURED on both Linux backends, and it pays on both - by a wider margin than anything else in this catalog. RTX 5070 Ti (cuda-linux) at 32K, f16 cache, temp 0, top_k 1, 200 tokens, two reps per arm: 64.2-64.4 tok/s baseline against 109.0-116.0 on a copy-heavy prompt (1.68-1.80x) and 64.7-64.8 against 91.7-95.5 on one with nothing to copy (1.42-1.48x). Radeon 780M iGPU (vulkan-linux), same configuration: 7.25-7.81 against 15.09-15.73 (2.00-2.16x) and 7.46-7.56 against 12.04-12.85 (1.60-1.72x). Draft acceptance 0.63-0.91, mean draft length 2.88-3.69. Prompt processing pays a part of it: 1443 tok/s to 1153 on CUDA; on the iGPU the same measurement moves both ways (58 to 78), which is shared-memory clock noise rather than an effect. The IQ3_XXS file measured 1.77-1.91x on copy and 1.41-1.48x on fresh, same shape."
+      },
+      "_outputComment": "Read this before treating the speedup as free. At temp 0 with top_k 1 and the same prompt bytes, the model-free ngram arm and the no-speculation baseline produced byte-identical text on every arm measured, and the iGPU's MTP arm did too. EMBEDDED MTP ON CUDA DID NOT: on the copy-heavy prompt it matched (sha 873c21ea05f0 either way), on the free-generation prompt it did not (8e546bdb65c8 without the draft, beed631b2d56 with it). Same model, same seed, same prompt, different continuation. The likely mechanism is that verifying a multi-token draft walks the SSM state forward in one batched pass instead of one position at a time, and a batched recurrent update is not bit-identical to a stepped one - at temp 0 a small numeric difference can flip an argmax and everything after it follows. That is a hypothesis about why, not a measurement of it; what is measured is that the output differs on one of two prompt shapes on one backend. So autoEnable is a real behaviour change on CUDA, not only a speed switch: a harness that needs reproducible output has to pass --spec-type none, and anyone who reports a speedup here has to report it with the caveat that CUDA MTP is not the same text. It is not a one-file accident: the IQ3_XXS entry measured the same way on the same backend — copy-heavy prompt identical either way (c4409c9e4150), free-generation prompt not (9ef0d2b09ac4 without the draft, d20f004b16a4 with it).",
+      "_findingComment": "This refutes the standing explanation in qwen38-27b, not its data. That entry recorded 0.86x and 0.65x for embedded MTP on the same 27B architecture on METAL, and offered a reason: a hybrid attention/SSM model has to walk each recurrent layer's state forward one position at a time, so verifying a draft of 3.7 tokens still costs 3.7 sequential state updates, and the speculation cannot be removed from the critical path. On CUDA and on this iGPU the same architecture with the same nextn layer comes out at 1.4-2.2x, so the SSM argument cannot be the whole story, and 'the baseline speed decides the sign' (the other explanation on file) does not cover it either: the iGPU arm ran at 7.3-7.8 tok/s, the slowest target in the catalog, and paid the MOST. What is actually different between the results is the llama.cpp build and the backend, not the architecture. Keep the Metal numbers as a measurement of Metal; do not keep its explanation as a law. The reversal is not one-sided: ngram-map-k, which paid 1.26x on Metal with this model family, measured 0.90x on CUDA and 0.70x here.",
+      "note": "The -mtp build is the only way to get MTP out of GSQ-RCO: the plain IQ2_XS file in the same repository ships without the nextn head, so --spec-type draft-mtp has nothing to draft with there. The model-free ngram arm was measured here too and it loses on both backends: 57.0-58.1 against 64.2-64.4 on CUDA (0.90x), and on the iGPU 6.2-6.5 in the hash-checked pass against 7.25-7.81 (0.84x) after reading 5.3-5.5 in an earlier pass against 7.89 (0.70x). Its one neutral result was on the free-generation prompt on CUDA, 64.5-64.7 against 64.7-64.8, where there is nothing to copy and nothing to lose. That is the opposite sign to qwen38-27b's Metal result, where ngram-map-k was the method that paid (1.26x) and MTP the one that did not (0.86x) - which is why this file declares only an mtp block and no speculative one, and why the pair of them cannot be a property of the model."
+    },
+    "overhead": {
+      "_comment": "No top-level figures: they would read as calibrated everywhere and they are not. Only a linux block, because Linux is the only platform this file has been run on.",
+      "linux": {
+        "baseMiB": 0,
+        "_baseComment": "MEASURED at 32K with an f16 cache, no vision, no speculation: 10475 MiB resident on the RTX 5070 Ti against 10413 of weights and cache (+62), and 10439 on the 780M iGPU (+26). The IQ3_XXS file measured -62 and +5 the same way. Four measurements, none further from zero than 62 MiB, which is inside the drift of the idle baseline itself (the amdgpu idle figure moved 248 MiB between runs). So the honest constant is 0: for these two files the file size plus the cache is the resident cost, with nothing left over to calibrate. The reason it is not the -389 MiB the Unsloth Q3 carries is that this file is smaller per layer, so the metadata and tokenizer tables that never reach the GPU are a smaller fraction of it, and the 332 MiB of skipped blk.64 tensors is already accounted for in weights-minus-resident.",
+        "visionMiB": 250,
+        "_visionComment": "MEASURED as the delta between the same run with and without --mmproj: +1138 MiB on CUDA for both files against an 888 MiB encoder, so +250 each; +1131 on the iGPU for this file (+243) and +1158 for IQ3_XXS (+277). In line with the +251 the other Qwen entries carry, which is worth noting because that figure was calibrated under Windows on a different file: the encoder overhead is a property of the architecture, not of the quantization.",
+        "note": "Both figures are CUDA-on-Linux and Vulkan-on-Linux together, because the platform key cannot tell them apart and they agreed to within 36 MiB. On a machine where 36 MiB matters, split the key by backend rather than trusting this block."
+      }
+    },
+    "sampling": {
+      "_comment": "The 'thinking' numbers are not borrowed for once: they are written in this file's own header (general.sampling.temp=1.0, top_p=0.95, top_k=20, min_p=0.0). 'instruct' is the family's published non-thinking profile, and 'coding' stays the extrapolated one the other 27B entries carry, so the default profile does not shift between quantizations of the same model.",
+      "_source": "this GGUF's general.sampling.* plus https://unsloth.ai/docs/models/qwen3.8",
+      "profile": "coding",
+      "profiles": {
+        "coding": {
+          "_comment": "EXTRAPOLATED, not published for this model. Qwen 3.5 documents its coding profile as its thinking profile with the temperature dropped to 0.6 and the presence penalty zeroed, leaving top_p and top_k alone; the same adjustment applied here.",
+          "temperature": 0.6, "topP": 0.95, "topK": 20, "minP": 0.0, "presencePenalty": 0.0, "repeatPenalty": 1.0
+        },
+        "thinking": {
+          "_comment": "From the file's own metadata. Reasoning depth is a separate control: --chat-template-kwargs '{\"reasoning_effort\":\"medium\"}', where the options are xhigh (the default), medium, low and none.",
+          "temperature": 1.0, "topP": 0.95, "topK": 20, "minP": 0.0, "presencePenalty": 0.0, "repeatPenalty": 1.0
+        },
+        "instruct": {
+          "_comment": "Published for the family, for non-thinking mode.",
+          "temperature": 0.7, "topP": 0.8, "topK": 20, "minP": 0.0, "presencePenalty": 1.5, "repeatPenalty": 1.0
+        }
+      }
+    },
+    "_qualityComment": "Vendor-reported, from the model card's own table, and worth reading against the two Unsloth rows this sits between. At 2.50 bpw / 8.4 GB (the non-MTP file): wikitext 7.69, zero-shot average 74.54 (100.3% of BF16), AIME25 96.67, GPQA-Diamond 84.85, LiveCodeBench v6 76.57. At matched size it beats Unsloth's UD-IQ2_S (8.4 GB) by 10.00 on AIME25, 8.59 on GPQA and 4.57 on LCB. Against the 1 GB LARGER UD-Q2_K_XL it LOSES on all three reasoning tasks (100.00 / 86.87 / 82.28), and on perplexity too (7.54 against 7.69). Nobody independent has reproduced any of that, including the recovery-above-BF16 claim. The reason this entry is in the catalog beside qwen38-27b-q2 and not instead of it: 1 GB less, and it ships an MTP head, which is the question being measured here.",
+    "note": "IST-DASLab GSQ-RCO mixed-precision IQ2_XS with the nextn head embedded. Vision encoder from the same repository."
+  },
+  "qwen38-27b-gsq-iq3xxs": {
+    "name": "Qwen 3.8 27B GSQ-RCO IQ3_XXS (MTP)",
+    "alias": "qwen3.8-27b-gsq-iq3xxs",
+    "_maxTokensComment": "Same base model as every other 27B entry, so the same ceiling taken from Qwen 3.5. A ceiling only, capped further by harness.maxOutputPercent.",
+    "maxTokens": 32768,
+    "modelFile": "Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp.gguf",
+    "modelUrl": "https://huggingface.co/ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF/resolve/main/Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp.gguf?download=true",
+    "modelSha256": "63f29a2189a6b4cc31f81e093d3856ad293a5583114439f41ae1ed7af4093262",
+    "_bytesComment": "Sizes as the host reports them, from x-linked-size on the resolve URL, confirmed against the file on disk.",
+    "modelBytes": 10442827840,
+    "mmprojBytes": 931146528,
+    "mmprojFile": "mmproj-Qwen3.8-27B-BF16.gguf",
+    "mmprojUrl": "https://huggingface.co/ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF/resolve/main/mmproj-Qwen3.8-27B-BF16.gguf?download=true",
+    "mmprojSha256": "13cb7bebccbd04afc8f4090cb949ecf8937cdf7377c5799b1a0c594e7c0d3e16",
+    "_mmprojComment": "One BF16 encoder serves both GSQ-RCO quantizations of this base model - the same artifact and the same hash as the IQ2_XS entry, which is what the repository's own card says and what the tensor shapes allow. VERIFY.sh hashes it once per entry that names it and finds the same file either way.",
+    "imageMinTokens": 1024,
+    "_quantComment": "The 3.00 bpw operating point of the same GSQ-RCO search. Its header's tensor-info table - read over an HTTP range request, same method as the IQ2_XS entry - is shifted one class up: F32 (360), BF16 (96), IQ3_S (97), IQ3_XXS (83), IQ2_S (72), IQ2_XXS (30), Q2_K (28), IQ4_XS (33), IQ2_XS (32), Q4_K (19), Q6_K (8), and only 4 tensors each at IQ1_S and IQ1_M where the IQ2_XS file parks 36 and 31. That is the whole size difference: fewer tensors at 1-2 bits. Every type in it has a kernel in both backends tested here. The two files share 96 BF16 and 360 F32 tensors - the search never touches what has to stay in full precision.",
+    "geometry": {
+      "kvElementsPerToken": 32768,
+      "kvElementsFixed": 0,
+      "maxContext": 262144,
+      "detail": {
+        "architecture": "qwen35",
+        "blockCount": 65,
+        "nextnLayers": 1,
+        "fullAttentionInterval": 4,
+        "attentionLayers": 16,
+        "headCountKv": 4,
+        "keyLength": 256,
+        "valueLength": 256,
+        "derivation": "Read from this file's own GGUF metadata: qwen35.block_count=65, nextn_predict_layers=1, full_attention_interval=4, attention.head_count_kv=4, key_length=256, value_length=256, context_length=262144 - key for key the same architecture as the IQ2_XS file and as the Unsloth Q3, which is what lets all three share a KV coefficient. 65 blocks = 64 real layers + 1 nextn (MTP). 16 attention layers x 4 kv heads x (256+256) = 32768 elements per token."
+      },
+      "summary": "hybrid attention/SSM: 16 of 65 layers hold a KV cache"
+    },
+    "mtp": {
+      "mode": "embedded",
+      "costMiB": 1400,
+      "_costComment": "MEASURED, same configuration as the IQ2_XS entry, which carries the full decomposition: 1040 MiB at load on the RTX 5070 Ti and 1136 on the 780M iGPU over the same run with speculation off, growing to 1058 on CUDA and 1651 on the iGPU after a full 200-token generation. The draft context costs what it costs regardless of which quantization it sits on, so both GSQ entries carry the same 1400 and the same reasoning for choosing the upper end of it.",
+      "autoEnable": false,
+      "_autoEnableComment": "Off on Windows and macOS, where this file has never been run. Measured and ON for Linux below.",
+      "linux": {
+        "autoEnable": true,
+        "costMiB": 1400,
+        "_comment": "MEASURED at 32K, f16 cache, temp 0, top_k 1, 200 tokens, two reps per arm, through serve.ps1 with the device pinned. CUDA (RTX 5070 Ti): 56.09-56.67 tok/s baseline against 99.37-102.31 with MTP on a copy-heavy prompt (1.77-1.82x), and 56.64-56.79 against 84.44-84.69 on one with nothing to copy (1.49-1.50x); an earlier pass with a slightly different prompt measured 58.65-58.69 against 111.05-113.34, so treat the ratio as 1.8-1.9x on copy and 1.4-1.5x elsewhere and the absolute as clock-dependent. Vulkan iGPU (Radeon 780M): 6.76 against 11.89-12.78 (1.76-1.89x) and 6.82-6.83 against 10.13-10.89 (1.49-1.60x). Prompt processing on CUDA: 1471.92 tok/s to 1318.62 with MTP. This is the best speculative result per byte in the catalog: 102-113 tok/s from a 9.7 GiB file on a 16 GB card.",
+        "_outputComment": "The no-speculation and MTP arms on CUDA did not produce the same text at temp 0 on the free-generation prompt (9ef0d2b09ac4 against d20f004b16a4) while they did on the copy-heavy prompt (c4409c9e4150 either way) - the same split the IQ2_XS entry documents, on a different file, which is what makes it a property of the CUDA draft path rather than of one quantization. The iGPU arms for this file were not hash-checked. See qwen38-27b-gsq-iq2xs mtp._outputComment before treating the speedup as free."
+      },
+      "_findingComment": "See the IQ2_XS entry: embedded MTP paying this hard on CUDA and on an AMD iGPU contradicts the reason qwen38-27b gives for it not paying on Metal. Both measurements stand; the explanation does not travel.",
+      "note": "The -mtp build of the 3.00 bpw quantization; the plain IQ3_XXS file in the same repository ships without the nextn head. The model-free ngram arm was measured here too: 53.16/54.13 against 58.65/58.69 on CUDA (0.92x) and 5.9/5.9 against 6.76/6.76 on the iGPU (0.87x), both from the first pass. It loses on both, so this entry declares no speculative block."
+    },
+    "overhead": {
+      "_comment": "No top-level figures: they would read as calibrated everywhere and they are not. Only a linux block, because Linux is the only platform this file has been run on.",
+      "linux": {
+        "baseMiB": 0,
+        "_baseComment": "MEASURED at 32K with an f16 cache, no vision, no speculation: 11945 MiB resident on the RTX 5070 Ti against 12007 of weights and cache (-62), and 12012 on the 780M iGPU (+5). Two measurements either side of zero, inside the drift of the idle baseline. Zero is the honest constant for this file too, and the pair across both GSQ quantizations (+62, +26, -62, +5) is what says so.",
+        "visionMiB": 260,
+        "_visionComment": "MEASURED as the delta with and without --mmproj: +1138 MiB on CUDA against an 888 MiB encoder (+250), +1158 on the iGPU (+277). 260 splits the two; the per-backend spread is 27 MiB.",
+        "note": "CUDA-on-Linux and Vulkan-on-Linux share the platform key and could not be separated in it. They agree to within 27 MiB here; split the key by backend if that stops being true."
+      }
+    },
+    "sampling": {
+      "_comment": "The 'thinking' numbers are written in this file's own header (general.sampling.temp=1.0, top_p=0.95, top_k=20, min_p=0.0). 'instruct' is the family's published non-thinking profile; 'coding' is the extrapolated one the other 27B entries carry, so the default profile does not shift between quantizations of the same model.",
+      "_source": "this GGUF's general.sampling.* plus https://unsloth.ai/docs/models/qwen3.8",
+      "profile": "coding",
+      "profiles": {
+        "coding": {
+          "_comment": "EXTRAPOLATED, not published for this model. Qwen 3.5's coding profile is its thinking profile with temperature 0.6 and presence penalty zeroed; the same adjustment applied here.",
+          "temperature": 0.6, "topP": 0.95, "topK": 20, "minP": 0.0, "presencePenalty": 0.0, "repeatPenalty": 1.0
+        },
+        "thinking": {
+          "_comment": "From the file's own metadata. Reasoning depth is a separate control: --chat-template-kwargs '{\"reasoning_effort\":\"medium\"}' (xhigh is the default, then medium, low, none).",
+          "temperature": 1.0, "topP": 0.95, "topK": 20, "minP": 0.0, "presencePenalty": 0.0, "repeatPenalty": 1.0
+        },
+        "instruct": {
+          "_comment": "Published for the family, for non-thinking mode.",
+          "temperature": 0.7, "topP": 0.8, "topK": 20, "minP": 0.0, "presencePenalty": 1.5, "repeatPenalty": 1.0
+        }
+      }
+    },
+    "_qualityComment": "Vendor-reported, and this is the row that makes the family worth a slot in the catalog. At 3.00 bpw / 10.1 GB (the non-MTP file): wikitext 7.20, zero-shot average 74.81 (100.6% of BF16), AIME25 100.00, GPQA-Diamond 88.89, LiveCodeBench v6 84.57. Read beside the Unsloth files it sits between: 0.6 GB MORE than UD-Q2_K_XL and ahead on every reasoning task, and 3 GB LESS than UD-Q3_K_XL (13.15 GB, the qwen38-27b entry) while inside 1.01 points on AIME25 and 0.98 on GPQA-Diamond. If those numbers reproduce, a 16 GB card gets Q3-class quality with room left for the encoder and a 32K cache. Nobody independent has reproduced any of it.",
+    "note": "IST-DASLab GSQ-RCO mixed-precision IQ3_XXS with the nextn head embedded. Vision encoder from the same repository."
+  },
   "qwen36-35b-a3b": {
     "_speculativeComment": "No speculative decoding, and that is measured rather than assumed. There is no MTP to enable: the GGUF header carries no nextn key at all (searched the raw bytes; the same search finds qwen35.nextn_predict_layers and blk.64.nextn.* in Qwen 3.8 27B, so the method detects MTP where it exists), and the Unsloth repo ships no companion draft file among its 31 files. The model-free ngram families were then measured on Metal, temp 0, 200 predicted tokens, with the no-speculation arm run last so page-cache warm-up could not flatter it: against a 48.08 tok/s baseline, ngram-map-k reached 48.16, ngram-map-k4v 48.06 and ngram-simple 48.19 on a copy-heavy prompt, and 47.6-49.0 on a prompt with nothing to copy. Every variant lands within noise. The reason is the baseline itself: speculation only pays when the target forward is slow, and at 48 tok/s this mixture of experts activates ~3B parameters per token, so the drafting and verification overhead cancels the gain exactly. For contrast, the same ngram-map-k on the dense 9B lifts 29.93 to 37.63 tok/s (1.26x). Do not add a speculative block here without re-measuring.",
     "name": "Qwen 3.6 35B-A3B UD-Q3_K_XL",

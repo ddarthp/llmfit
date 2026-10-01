@@ -65,25 +65,27 @@
     ]
   },
   "vulkan-linux": {
-    "_comment": "The Linux counterpart of the Windows Vulkan backend, and the one to pick on any AMD or Intel GPU, an APU, or an NVIDIA card without CUDA installed. The ubuntu archives are tar.gz with the build under a llama-b<build> directory, so they strip one component to land flat, exactly like the macOS one.",
+    "_comment": "The Linux counterpart of the Windows Vulkan backend, and the one to pick on any AMD or Intel GPU, an APU, or an NVIDIA card without CUDA installed. The ubuntu archives are tar.gz with the build under a llama-b<build> directory, so they strip one component to land flat, exactly like the macOS one. This backend sits on b10976, the same build as cuda-linux, on purpose: on a machine that carries both an NVIDIA card and an AMD iGPU the two backends get compared against each other, and comparing an older Vulkan against a newer CUDA measures the release as much as it measures the driver. The local archive name carries the build for the same reason - an artifact called llama-vulkan-linux-x64.tar.gz that holds a different build than the config points at is indistinguishable from a truncated download, and Ensure-Artifact would try to resume across two different files.",
     "name": "Vulkan (AMD, Intel and NVIDIA; recommended for APUs and integrated GPUs)",
     "platform": "linux",
     "architecture": "x64",
     "folder": "llama.cpp-vulkan-linux",
+    "_integrityManifestComment": "Declared alongside tree, which stays what verification reads, because the two fields do different jobs. The tree count is the contract the committed verifier enforces; the manifest is what makes a version bump self-healing, since Ensure-Backend rebuilds an extracted folder that has no manifest instead of returning early on a folder that merely already has a binary in it. Without that second field a machine that installed the previous build keeps it, and VERIFY.sh reports the new tree as incomplete with no command in this project that fixes it.",
+    "integrityManifest": "sha256",
     "gpuLayers": 999,
     "_pinDeviceComment": "Same reason as on Windows: llama.cpp splits over every device the backend enumerates, sized with the static 'free' from --list-devices, so a machine with an APU and a discrete card runs part of the model somewhere nobody chose. The launcher pins one device and sends --split-mode none.",
     "pinDevice": true,
-    "_speculativeComment": "On, and measured here rather than assumed. Qwen 3.6 35B-A3B from its MTP build, 32K with vision and q8_0 KV on a gfx1103 iGPU: 28.2-28.6 tok/s without, 37.5-38.3 with, at draft acceptance 0.71-0.73 - the embedded nextn path works on this backend. That is NOT a clearance for every method: the Windows measurement on this same backend stands, where on b10566 Gemma 4 E4B with its COMPANION DRAFT FILE aborts during KV allocation with 'pre-allocated tensor (cache_k_l22) in a buffer (Vulkan0) that cannot run the operation (NONE)', which is Gemma 4's shared-KV layers meeting a Vulkan buffer that has no kernel for them. That path HAS now been run on Linux, with the same b10566 build, and it does not abort: Gemma 4 E4B loads its companion draft, generates and stops cleanly. What it does not do is pay - acceptance 0.34, and generation within noise of no speculation - so the three Gemma entries turn it off for Linux in their own blocks rather than the backend refusing it for everyone.",
+    "_speculativeComment": "Every Linux figure quoted below was taken on the b10566 build this entry carried before the bump to b10976, so read them as the same hardware on an older llama.cpp, not as numbers this binary reproduces. On, and measured here rather than assumed. Qwen 3.6 35B-A3B from its MTP build, 32K with vision and q8_0 KV on a gfx1103 iGPU: 28.2-28.6 tok/s without, 37.5-38.3 with, at draft acceptance 0.71-0.73 - the embedded nextn path works on this backend. That is NOT a clearance for every method: the Windows measurement on this same backend stands, where on b10566 Gemma 4 E4B with its COMPANION DRAFT FILE aborts during KV allocation with 'pre-allocated tensor (cache_k_l22) in a buffer (Vulkan0) that cannot run the operation (NONE)', which is Gemma 4's shared-KV layers meeting a Vulkan buffer that has no kernel for them. That path HAS now been run on Linux, with the same b10566 build, and it does not abort: Gemma 4 E4B loads its companion draft, generates and stops cleanly. What it does not do is pay - acceptance 0.34, and generation within noise of no speculation - so the three Gemma entries turn it off for Linux in their own blocks rather than the backend refusing it for everyone.",
     "speculativeDecoding": true,
     "tree": {
-      "files": 63,
-      "bytes": 95600024
+      "files": 61,
+      "bytes": 84838928
     },
     "archives": [
       {
-        "file": "llama-vulkan-linux-x64.tar.gz",
-        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10566/llama-b10566-bin-ubuntu-vulkan-x64.tar.gz",
-        "sha256": "773b3445348b5527dfe1601a7a37d9cf0e144a1023eee115351334bdb851b164",
+        "file": "llama-vulkan-linux-x64-b10976.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10976/llama-b10976-bin-ubuntu-vulkan-x64.tar.gz",
+        "sha256": "bf5c969d34ce1dad3a00088aeb3279714fd538b5b1149c01edac0bec7bfb8f49",
         "stripComponents": 1
       }
     ]
